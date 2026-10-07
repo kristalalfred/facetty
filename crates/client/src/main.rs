@@ -140,7 +140,10 @@ async fn join(
         None => (None, None),
         Some(opts) => {
             match Engine::start(opts, session::audio_sender(session.connection.clone())) {
-                Ok(engine) => (Some(Arc::new(engine)), None),
+                Ok(engine) => {
+                    let problem = engine.device_problem();
+                    (Some(Arc::new(engine)), problem)
+                }
                 Err(e) => (None, Some(format!("audio off: {e:#}"))),
             }
         }

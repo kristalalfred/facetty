@@ -16,11 +16,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
+use cpal::ErrorKind;
 use cpal::traits::HostTrait;
 
 use device::Capture;
 use mixer::{Command, Mixer};
-use resample::Resampler;
 
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const FRAME_SAMPLES: usize = 960;
@@ -29,6 +29,10 @@ const FRAME_DURATION: Duration = Duration::from_millis(20);
 const MAX_CLOCK_LAG: Duration = Duration::from_millis(200);
 /// Bounds memory if playback stalls (e.g. the output device disappeared).
 const MAX_INBOX: usize = 2_000;
+/// Lets a device settle after a rate change or reconnect before its stream
+/// is rebuilt.
+const REOPEN_DELAY: Duration = Duration::from_millis(250);
+const RETRY_DELAY: Duration = Duration::from_secs(2);
 
 pub enum Input {
     None,
@@ -55,6 +59,7 @@ pub(crate) struct Shared {
     local_level: AtomicU32,
     inbox: Mutex<Vec<Command>>,
     levels: Mutex<HashMap<u32, f32>>,
+    device_problem: Mutex<Option<String>>,
 }
 
 pub struct Engine {
@@ -63,7 +68,7 @@ pub struct Engine {
 }
 
 struct DeviceThread {
-    stop: mpsc::Sender<()>,
+    signals: mpsc::Sender<DeviceSignal>,
     handle: JoinHandle<()>,
 }
 
@@ -80,57 +85,55 @@ impl Engine {
             local_level: AtomicU32::new(0f32.to_bits()),
             inbox: Mutex::new(Vec::new()),
             levels: Mutex::new(HashMap::new()),
+            device_problem: Mutex::new(None),
         });
-        let mut sender = Some(PacketSender::new(shared.clone(), Box::new(on_packet))?);
-        let mixer = Mixer::new(shared.clone());
-
-        let (input_device, pcm) = match opts.input {
-            Input::None => (None, None),
-            Input::Device(name) => (Some(name), None),
-            Input::Pcm(reader) => (None, Some(reader)),
-        };
-        let (output_device, headless_mixer) = match opts.output {
-            Output::Device(name) => (Some((name, mixer)), None),
-            Output::None => (None, Some(mixer)),
-        };
-
+        let sender = PacketSender::new(shared.clone(), Box::new(on_packet))?;
         let mut engine = Engine {
             shared: shared.clone(),
             device_thread: None,
         };
 
-        let capture = input_device.as_ref().map(|_| {
-            Arc::new(Capture {
-                samples: Mutex::new(VecDeque::new()),
-                ready: Condvar::new(),
-            })
-        });
-        if input_device.is_some() || output_device.is_some() {
-            let (thread, input_rate) =
-                DeviceThread::spawn(input_device, capture.clone(), output_device)?;
-            engine.device_thread = Some(thread);
-            if let (Some(capture), Some(rate), Some(sender)) = (capture, input_rate, sender.take())
-            {
+        let mut slots = Vec::new();
+        match opts.input {
+            Input::None => {}
+            Input::Device(name) => {
+                let capture = Arc::new(Capture {
+                    samples: Mutex::new(VecDeque::new()),
+                    ready: Condvar::new(),
+                });
+                slots.push(Slot::new(Role::Mic(capture.clone()), name));
                 let shared = shared.clone();
                 thread::Builder::new()
                     .name("bits-audio-encode".into())
-                    .spawn(move || encode_capture(shared, capture, rate, sender))?;
+                    .spawn(move || encode_capture(shared, capture, sender))?;
+            }
+            Input::Pcm(reader) => {
+                let shared = shared.clone();
+                thread::Builder::new()
+                    .name("bits-audio-pcm".into())
+                    .spawn(move || encode_pcm(shared, reader, sender))?;
             }
         }
-        if let (Some(reader), Some(sender)) = (pcm, sender.take()) {
-            let shared = shared.clone();
-            thread::Builder::new()
-                .name("bits-audio-pcm".into())
-                .spawn(move || encode_pcm(shared, reader, sender))?;
+        match opts.output {
+            Output::Device(name) => slots.push(Slot::new(Role::Speaker, name)),
+            Output::None => {
+                let mixer = Mixer::new(shared.clone());
+                let shared = shared.clone();
+                thread::Builder::new()
+                    .name("bits-audio-mix".into())
+                    .spawn(move || mix_headless(shared, mixer))?;
+            }
         }
-
-        if let Some(mixer) = headless_mixer {
-            let shared = shared.clone();
-            thread::Builder::new()
-                .name("bits-audio-mix".into())
-                .spawn(move || mix_headless(shared, mixer))?;
+        if !slots.is_empty() {
+            engine.device_thread = Some(DeviceThread::spawn(shared, slots)?);
         }
         Ok(engine)
+    }
+
+    /// Why the mic or speaker is not working right now, if it isn't. Failed
+    /// devices are retried in the background.
+    pub fn device_problem(&self) -> Option<String> {
+        self.shared.device_problem.lock().unwrap().clone()
     }
 
     /// Never blocks on decoding; packets are handed to the playback thread.
@@ -180,58 +183,182 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.shared.running.store(false, Ordering::Relaxed);
         if let Some(thread) = self.device_thread.take() {
-            drop(thread.stop);
+            let _ = thread.signals.send(DeviceSignal::Stop);
             let _ = thread.handle.join();
+        }
+    }
+}
+
+enum DeviceSignal {
+    Stop,
+    Failed {
+        slot: usize,
+        generation: u64,
+        error: String,
+    },
+}
+
+enum Role {
+    Mic(Arc<Capture>),
+    Speaker,
+}
+
+struct Slot {
+    role: Role,
+    name: Option<String>,
+    stream: Option<cpal::Stream>,
+    generation: u64,
+    retry_at: Instant,
+    problem: Option<String>,
+}
+
+impl Slot {
+    fn new(role: Role, name: Option<String>) -> Self {
+        Slot {
+            role,
+            name,
+            stream: None,
+            generation: 0,
+            retry_at: Instant::now(),
+            problem: None,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self.role {
+            Role::Mic(_) => "mic",
+            Role::Speaker => "speaker",
+        }
+    }
+
+    fn open(&mut self, index: usize, shared: &Arc<Shared>, signals: &mpsc::Sender<DeviceSignal>) {
+        self.generation += 1;
+        let label = self.label();
+        let generation = self.generation;
+        let signals = signals.clone();
+        let on_error = move |e: cpal::Error| {
+            if matches!(
+                e.kind(),
+                ErrorKind::Xrun | ErrorKind::DeviceChanged | ErrorKind::RealtimeDenied
+            ) {
+                tracing::debug!("{label}: {e}");
+            } else {
+                let _ = signals.send(DeviceSignal::Failed {
+                    slot: index,
+                    generation,
+                    error: e.to_string(),
+                });
+            }
+        };
+        let opened = device::find(self.name.as_deref(), matches!(self.role, Role::Mic(_)))
+            .and_then(|device| {
+                match &self.role {
+                    Role::Mic(capture) => device::start_input(&device, capture.clone(), on_error),
+                    Role::Speaker => {
+                        device::start_output(&device, Mixer::new(shared.clone()), on_error)
+                    }
+                }
+                .with_context(|| device::device_name(&device))
+            });
+        match opened {
+            Ok(stream) => {
+                if self.problem.take().is_some() {
+                    tracing::info!("{label}: reopened");
+                }
+                self.stream = Some(stream);
+            }
+            Err(e) => {
+                let problem = format!("{label}: {e:#}");
+                if self.problem.as_ref() != Some(&problem) {
+                    tracing::warn!("{problem}");
+                }
+                self.problem = Some(problem);
+                self.retry_at = Instant::now() + RETRY_DELAY;
+            }
+        }
+    }
+
+    fn fail(&mut self, error: String) {
+        if self.stream.take().is_some() {
+            let problem = format!("{}: {error}", self.label());
+            tracing::warn!("{problem}; reopening");
+            self.problem = Some(problem);
+            self.retry_at = Instant::now() + REOPEN_DELAY;
         }
     }
 }
 
 impl DeviceThread {
     /// cpal streams are not `Send` on every platform, so one thread builds
-    /// them and keeps them alive until the engine drops.
-    fn spawn(
-        input: Option<Option<String>>,
-        capture: Option<Arc<Capture>>,
-        output: Option<(Option<String>, Mixer)>,
-    ) -> Result<(DeviceThread, Option<u32>)> {
+    /// them and keeps them alive until the engine drops. Returns once every
+    /// device has been tried once.
+    fn spawn(shared: Arc<Shared>, slots: Vec<Slot>) -> Result<DeviceThread> {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        let (stop, stop_rx) = mpsc::channel::<()>();
+        let (signals, signals_rx) = mpsc::channel();
+        let signals_for_streams = signals.clone();
         let handle = thread::Builder::new()
             .name("bits-audio-device".into())
-            .spawn(move || {
-                let started = (|| -> Result<_> {
-                    let mut streams = Vec::new();
-                    let mut input_rate = None;
-                    if let (Some(name), Some(capture)) = (input, capture) {
-                        let device = device::find(name.as_deref(), true)?;
-                        let (stream, rate) = device::start_input(&device, capture)
-                            .with_context(|| format!("input {}", device::device_name(&device)))?;
-                        streams.push(stream);
-                        input_rate = Some(rate);
-                    }
-                    if let Some((name, mixer)) = output {
-                        let device = device::find(name.as_deref(), false)?;
-                        let stream = device::start_output(&device, mixer)
-                            .with_context(|| format!("output {}", device::device_name(&device)))?;
-                        streams.push(stream);
-                    }
-                    Ok((streams, input_rate))
-                })();
-                match started {
-                    Ok((streams, input_rate)) => {
-                        let _ = ready_tx.send(Ok(input_rate));
-                        let _ = stop_rx.recv();
-                        drop(streams);
-                    }
-                    Err(e) => {
-                        let _ = ready_tx.send(Err(e));
-                    }
-                }
-            })?;
-        let input_rate = ready_rx
+            .spawn(move || run_devices(shared, slots, signals_for_streams, signals_rx, ready_tx))?;
+        ready_rx
             .recv()
-            .map_err(|_| anyhow!("audio device thread exited during setup"))??;
-        Ok((DeviceThread { stop, handle }, input_rate))
+            .map_err(|_| anyhow!("audio device thread exited during setup"))?;
+        Ok(DeviceThread { signals, handle })
+    }
+}
+
+fn run_devices(
+    shared: Arc<Shared>,
+    mut slots: Vec<Slot>,
+    signals: mpsc::Sender<DeviceSignal>,
+    signals_rx: mpsc::Receiver<DeviceSignal>,
+    ready: mpsc::SyncSender<()>,
+) {
+    let mut ready = Some(ready);
+    loop {
+        let now = Instant::now();
+        for (index, slot) in slots.iter_mut().enumerate() {
+            if slot.stream.is_none() && slot.retry_at <= now {
+                slot.open(index, &shared, &signals);
+            }
+        }
+        let problems: Vec<&str> = slots.iter().filter_map(|s| s.problem.as_deref()).collect();
+        *shared.device_problem.lock().unwrap() =
+            (!problems.is_empty()).then(|| problems.join("; "));
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(());
+        }
+
+        let next_retry = slots
+            .iter()
+            .filter(|s| s.stream.is_none())
+            .map(|s| s.retry_at)
+            .min();
+        let signal = match next_retry {
+            Some(at) => {
+                match signals_rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                    Ok(signal) => signal,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            None => match signals_rx.recv() {
+                Ok(signal) => signal,
+                Err(_) => break,
+            },
+        };
+        match signal {
+            DeviceSignal::Stop => break,
+            DeviceSignal::Failed {
+                slot,
+                generation,
+                error,
+            } => {
+                let slot = &mut slots[slot];
+                if slot.generation == generation {
+                    slot.fail(error);
+                }
+            }
+        }
     }
 }
 
@@ -272,9 +399,7 @@ impl PacketSender {
     }
 }
 
-fn encode_capture(shared: Arc<Shared>, capture: Arc<Capture>, rate: u32, mut sender: PacketSender) {
-    let mut resampler = Resampler::new(rate, SAMPLE_RATE);
-    let mut chunk = Vec::new();
+fn encode_capture(shared: Arc<Shared>, capture: Arc<Capture>, mut sender: PacketSender) {
     let mut pending = Vec::new();
     while shared.running.load(Ordering::Relaxed) {
         {
@@ -286,10 +411,8 @@ fn encode_capture(shared: Arc<Shared>, capture: Arc<Capture>, rate: u32, mut sen
                     .unwrap()
                     .0;
             }
-            chunk.clear();
-            chunk.extend(samples.drain(..));
+            pending.extend(samples.drain(..));
         }
-        resampler.process(&chunk, &mut pending);
         let mut frames = pending.chunks_exact(FRAME_SAMPLES);
         for frame in &mut frames {
             sender.send(frame.try_into().unwrap());

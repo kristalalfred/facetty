@@ -55,34 +55,45 @@ fn direction(input: bool) -> &'static str {
     if input { "input" } else { "output" }
 }
 
-/// Starts capturing into `capture`; returns the stream and its sample rate.
-pub(crate) fn start_input(device: &Device, capture: Arc<Capture>) -> Result<(Stream, u32)> {
+/// Starts capturing into `capture`, resampled to `SAMPLE_RATE`.
+pub(crate) fn start_input<E>(device: &Device, capture: Arc<Capture>, on_error: E) -> Result<Stream>
+where
+    E: FnMut(cpal::Error) + Send + 'static,
+{
     let supported = device
         .default_input_config()
         .context("input device has no usable config")?;
     let config = supported.config();
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => input_stream::<f32>(device, config, capture),
-        SampleFormat::F64 => input_stream::<f64>(device, config, capture),
-        SampleFormat::I8 => input_stream::<i8>(device, config, capture),
-        SampleFormat::I16 => input_stream::<i16>(device, config, capture),
-        SampleFormat::I32 => input_stream::<i32>(device, config, capture),
-        SampleFormat::U8 => input_stream::<u8>(device, config, capture),
-        SampleFormat::U16 => input_stream::<u16>(device, config, capture),
-        SampleFormat::U32 => input_stream::<u32>(device, config, capture),
+        SampleFormat::F32 => input_stream::<f32, E>(device, config, capture, on_error),
+        SampleFormat::F64 => input_stream::<f64, E>(device, config, capture, on_error),
+        SampleFormat::I8 => input_stream::<i8, E>(device, config, capture, on_error),
+        SampleFormat::I16 => input_stream::<i16, E>(device, config, capture, on_error),
+        SampleFormat::I32 => input_stream::<i32, E>(device, config, capture, on_error),
+        SampleFormat::U8 => input_stream::<u8, E>(device, config, capture, on_error),
+        SampleFormat::U16 => input_stream::<u16, E>(device, config, capture, on_error),
+        SampleFormat::U32 => input_stream::<u32, E>(device, config, capture, on_error),
         other => bail!("unsupported input sample format {other:?}"),
     }?;
     stream.play()?;
-    Ok((stream, config.sample_rate))
+    Ok(stream)
 }
 
-fn input_stream<T>(device: &Device, config: StreamConfig, capture: Arc<Capture>) -> Result<Stream>
+fn input_stream<T, E>(
+    device: &Device,
+    config: StreamConfig,
+    capture: Arc<Capture>,
+    on_error: E,
+) -> Result<Stream>
 where
     T: SizedSample,
     f32: FromSample<T>,
+    E: FnMut(cpal::Error) + Send + 'static,
 {
     let channels = config.channels.max(1) as usize;
+    let mut resampler = Resampler::new(config.sample_rate, SAMPLE_RATE);
     let mut mono = Vec::new();
+    let mut resampled = Vec::new();
     let stream = device.build_input_stream::<T, _, _>(
         config,
         move |data: &[T], _| {
@@ -90,42 +101,53 @@ where
             mono.extend(data.chunks(channels).map(|frame| {
                 frame.iter().map(|s| s.to_sample::<f32>()).sum::<f32>() / channels as f32
             }));
+            resampled.clear();
+            resampler.process(&mono, &mut resampled);
             let mut samples = capture.samples.lock().unwrap();
-            samples.extend(&mono);
+            samples.extend(&resampled);
             let excess = samples.len().saturating_sub(MAX_CAPTURE_BACKLOG);
             samples.drain(..excess);
             drop(samples);
             capture.ready.notify_one();
         },
-        |e| tracing::warn!("audio input: {e}"),
+        on_error,
         None,
     )?;
     Ok(stream)
 }
 
-pub(crate) fn start_output(device: &Device, mixer: Mixer) -> Result<Stream> {
+pub(crate) fn start_output<E>(device: &Device, mixer: Mixer, on_error: E) -> Result<Stream>
+where
+    E: FnMut(cpal::Error) + Send + 'static,
+{
     let supported = device
         .default_output_config()
         .context("output device has no usable config")?;
     let config = supported.config();
     let stream = match supported.sample_format() {
-        SampleFormat::F32 => output_stream::<f32>(device, config, mixer),
-        SampleFormat::F64 => output_stream::<f64>(device, config, mixer),
-        SampleFormat::I8 => output_stream::<i8>(device, config, mixer),
-        SampleFormat::I16 => output_stream::<i16>(device, config, mixer),
-        SampleFormat::I32 => output_stream::<i32>(device, config, mixer),
-        SampleFormat::U8 => output_stream::<u8>(device, config, mixer),
-        SampleFormat::U16 => output_stream::<u16>(device, config, mixer),
-        SampleFormat::U32 => output_stream::<u32>(device, config, mixer),
+        SampleFormat::F32 => output_stream::<f32, E>(device, config, mixer, on_error),
+        SampleFormat::F64 => output_stream::<f64, E>(device, config, mixer, on_error),
+        SampleFormat::I8 => output_stream::<i8, E>(device, config, mixer, on_error),
+        SampleFormat::I16 => output_stream::<i16, E>(device, config, mixer, on_error),
+        SampleFormat::I32 => output_stream::<i32, E>(device, config, mixer, on_error),
+        SampleFormat::U8 => output_stream::<u8, E>(device, config, mixer, on_error),
+        SampleFormat::U16 => output_stream::<u16, E>(device, config, mixer, on_error),
+        SampleFormat::U32 => output_stream::<u32, E>(device, config, mixer, on_error),
         other => bail!("unsupported output sample format {other:?}"),
     }?;
     stream.play()?;
     Ok(stream)
 }
 
-fn output_stream<T>(device: &Device, config: StreamConfig, mut mixer: Mixer) -> Result<Stream>
+fn output_stream<T, E>(
+    device: &Device,
+    config: StreamConfig,
+    mut mixer: Mixer,
+    on_error: E,
+) -> Result<Stream>
 where
     T: SizedSample + FromSample<f32>,
+    E: FnMut(cpal::Error) + Send + 'static,
 {
     let channels = config.channels.max(1) as usize;
     let mut resampler = Resampler::new(SAMPLE_RATE, config.sample_rate);
@@ -146,7 +168,7 @@ where
                 out.fill(T::from_sample(pending.pop_front().unwrap_or(0.0)));
             }
         },
-        |e| tracing::warn!("audio output: {e}"),
+        on_error,
         None,
     )?;
     Ok(stream)
