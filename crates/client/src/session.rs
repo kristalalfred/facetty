@@ -306,7 +306,7 @@ async fn connect_media(server: &MediaServer) -> Result<(quinn::Endpoint, quinn::
         .addr
         .to_socket_addrs()
         .with_context(|| format!("resolving media server {}", server.addr))?
-        .next()
+        .min_by_key(|a| a.is_ipv6())
         .with_context(|| format!("no address for media server {}", server.addr))?;
     let pinned = hex::decode(&server.cert_sha256).context("bad certificate hash")?;
 

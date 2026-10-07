@@ -14,7 +14,9 @@ pub struct Participant {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MediaServer {
-    /// `host:port` of the SFU's QUIC endpoint.
+    /// `host:port` of the SFU's QUIC endpoint. From an SFU, `:port` means
+    /// "the host the client reached the signaling server on"; the signaling
+    /// server fills it in before clients see it.
     pub addr: String,
     /// Hex SHA-256 of the SFU's self-signed certificate; clients pin it.
     pub cert_sha256: String,

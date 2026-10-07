@@ -1,10 +1,14 @@
+mod install;
+
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
+use axum::http::header::HOST;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -20,6 +24,7 @@ const TOKEN_TTL: Duration = Duration::from_secs(24 * 3600);
 
 pub struct Signal {
     secret: Vec<u8>,
+    client_binary: Option<PathBuf>,
     next_id: AtomicU32,
     state: Mutex<Inner>,
 }
@@ -47,9 +52,11 @@ struct Sfu {
 }
 
 impl Signal {
-    pub fn new(secret: &[u8]) -> Arc<Self> {
+    /// `client_binary` is served to `/install` so others can fetch the client.
+    pub fn new(secret: &[u8], client_binary: Option<PathBuf>) -> Arc<Self> {
         Arc::new(Self {
             secret: secret.to_vec(),
+            client_binary,
             next_id: AtomicU32::new(1),
             state: Mutex::new(Inner::default()),
         })
@@ -81,6 +88,8 @@ pub fn router(signal: Arc<Signal>) -> Router {
         .route("/rooms/{room}", get(room_info))
         .route("/rooms/{room}/ws", get(join))
         .route("/internal/sfu/heartbeat", post(heartbeat))
+        .route("/install", get(install::script))
+        .route("/download/bits", get(install::download))
         .with_state(signal)
 }
 
@@ -93,13 +102,18 @@ async fn join(
     State(signal): State<Arc<Signal>>,
     Path(room): Path<String>,
     Query(query): Query<JoinQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
     if !signal::valid_room(&room) {
         return (StatusCode::BAD_REQUEST, "invalid room name").into_response();
     }
     let name = clean_name(query.name.as_deref());
-    ws.on_upgrade(move |socket| session(signal, room, name, socket))
+    let host = headers
+        .get(HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(|h| strip_port(h).to_string());
+    ws.on_upgrade(move |socket| session(signal, room, name, host, socket))
 }
 
 async fn room_info(
@@ -133,7 +147,13 @@ async fn heartbeat(
     StatusCode::NO_CONTENT
 }
 
-async fn session(signal: Arc<Signal>, room: String, name: String, mut socket: WebSocket) {
+async fn session(
+    signal: Arc<Signal>,
+    room: String,
+    name: String,
+    host: Option<String>,
+    mut socket: WebSocket,
+) {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let id = signal.next_id.fetch_add(1, Ordering::Relaxed);
     let me = Participant {
@@ -143,7 +163,7 @@ async fn session(signal: Arc<Signal>, room: String, name: String, mut socket: We
         video_off: false,
     };
 
-    let welcome = match admit(&signal, &room, me.clone(), tx) {
+    let welcome = match admit(&signal, &room, me.clone(), host.as_deref(), tx) {
         Ok(w) => w,
         Err(message) => {
             let _ = send(&mut socket, &ServerEvent::Error { message }).await;
@@ -185,6 +205,7 @@ fn admit(
     signal: &Signal,
     room_name: &str,
     me: Participant,
+    host: Option<&str>,
     events: mpsc::UnboundedSender<ServerEvent>,
 ) -> Result<ServerEvent, String> {
     let mut inner = signal.lock();
@@ -207,7 +228,11 @@ fn admit(
             id
         }
     };
-    let media = inner.sfus[&sfu_id].media.clone();
+    let mut media = inner.sfus[&sfu_id].media.clone();
+    if media.addr.starts_with(':') {
+        let host = host.ok_or("cannot tell which host the media server is on")?;
+        media.addr = format!("{host}{}", media.addr);
+    }
     let room = inner
         .rooms
         .entry(room_name.to_string())
@@ -326,6 +351,17 @@ fn clean_name(name: Option<&str>) -> String {
     }
 }
 
+/// `host:port` or `[v6]:port` from a Host header, without the port.
+fn strip_port(host: &str) -> &str {
+    if let Some(end) = host.find(']') {
+        return &host[..=end];
+    }
+    match host.split_once(':') {
+        Some((h, port)) if !port.contains(':') => h,
+        _ => host,
+    }
+}
+
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
@@ -335,4 +371,17 @@ fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_ports_from_hosts() {
+        assert_eq!(strip_port("10.4.0.86:8740"), "10.4.0.86");
+        assert_eq!(strip_port("[::1]:8740"), "[::1]");
+        assert_eq!(strip_port("localhost"), "localhost");
+        assert_eq!(strip_port("[::1]"), "[::1]");
+    }
 }

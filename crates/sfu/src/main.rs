@@ -14,7 +14,7 @@ struct Args {
     #[arg(long, env = "BITS_SFU_LISTEN", default_value = "0.0.0.0:8741")]
     listen: SocketAddr,
     /// Address clients should dial, as `host:port`. Defaults to the listen
-    /// port on 127.0.0.1.
+    /// port on whichever host clients used to reach the signaling server.
     #[arg(long, env = "BITS_SFU_PUBLIC_ADDR")]
     public_addr: Option<String>,
     /// Signaling server to register with.
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let sfu = Arc::new(Sfu::bind(args.listen, args.secret.as_bytes())?);
     let public_addr = args
         .public_addr
-        .unwrap_or_else(|| format!("127.0.0.1:{}", args.listen.port()));
+        .unwrap_or_else(|| format!(":{}", args.listen.port()));
     info!(listen = %sfu.local_addr()?, %public_addr, cert = sfu.cert_sha256(), "media server up");
 
     tokio::spawn(heartbeat(

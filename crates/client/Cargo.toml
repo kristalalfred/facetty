@@ -11,7 +11,7 @@ bits-audio = { version = "0.1.0", path = "../audio" }
 bits-proto = { version = "0.1.0", path = "../proto" }
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive", "env"] }
-crossterm = { version = "0.29.0", features = ["event-stream"] }
+crossterm = { version = "0.29.0", features = ["event-stream", "use-dev-tty"] }
 futures-util = "0.3.34"
 hex = "0.4.3"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }

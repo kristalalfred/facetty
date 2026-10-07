@@ -35,6 +35,26 @@ Use headphones. There is no echo cancellation, so speakers feed back into the mi
 | `e`, `[`, `]` | edges on / off, exposure down / up (changes what others see) |
 | `q` | leave |
 
+## Calling someone on your network
+
+```sh
+just share standup
+```
+
+This builds release binaries, starts both servers with a random secret, and
+prints a line like this for the other person:
+
+```sh
+curl -fsSL http://192.0.2.10:8740/install | sh -s -- standup
+```
+
+The script downloads the client into `~/.bits/bin` and joins the room. The
+signaling server hands out the `bits` binary that sits next to it, so the
+other machine has to be the same OS and architecture as yours. They need
+ffmpeg for their camera. On recent macOS the first connection may ask to let
+the terminal app access the local network. `just share standup 8750` uses
+ports 8750/8751 instead.
+
 `bits devices` lists cameras and audio devices; pick them with
 `--video camera:<index>`, `--mic <name>`, `--speaker <name>`. `--video` also
 takes `test` or any input ffmpeg can open (a file loops).
@@ -89,10 +109,11 @@ signs an HMAC token (room, participant id) that the SFU checks with the same
 |---|---|---|
 | signal listen | `BITS_SIGNAL_LISTEN` | `0.0.0.0:8740` (TCP) |
 | SFU listen | `BITS_SFU_LISTEN` | `0.0.0.0:8741` (UDP) |
-| SFU address given to clients | `BITS_SFU_PUBLIC_ADDR` | `127.0.0.1:<listen port>` |
+| SFU address given to clients | `BITS_SFU_PUBLIC_ADDR` | the host the client used to reach the signaling server, with the SFU's port |
 | signaling URL the SFU registers with | `BITS_SIGNAL_URL` | `http://127.0.0.1:8740` |
 | shared secret (both) | `BITS_SECRET` | an insecure dev value, with a warning |
 | server for the client | `BITS_SERVER` | `http://127.0.0.1:8740` |
+| client binary served at `/install` | `BITS_CLIENT_BINARY` | `bits` next to `bits-signal` |
 
 Several SFUs can register with one signaling server; a new room goes to the
 one with the fewest connections. The signaling server speaks plain HTTP; put

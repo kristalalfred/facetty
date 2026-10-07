@@ -16,12 +16,12 @@ const WAIT: Duration = Duration::from_secs(10);
 
 async fn start_servers() -> String {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let signal = bits_signal::Signal::new(SECRET);
+    let signal = bits_signal::Signal::new(SECRET, None);
     let sfu = Arc::new(bits_sfu::Sfu::bind("127.0.0.1:0".parse().unwrap(), SECRET).unwrap());
     signal.register_sfu(SfuHeartbeat {
         id: "test".into(),
         media: MediaServer {
-            addr: sfu.local_addr().unwrap().to_string(),
+            addr: format!(":{}", sfu.local_addr().unwrap().port()),
             cert_sha256: sfu.cert_sha256().to_string(),
         },
         connections: 0,
