@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 pub type Rung = u8;
 
-const COLS: [u16; 13] = [16, 24, 32, 40, 48, 64, 80, 96, 112, 128, 160, 192, 224];
+const STEP: u16 = 8;
+const RUNGS: u16 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Size {
@@ -14,11 +15,15 @@ pub struct Size {
 }
 
 pub fn rungs() -> impl Iterator<Item = Rung> {
-    0..COLS.len() as Rung
+    0..RUNGS as Rung
 }
 
+/// Rung `n` is `8 * (n + 2)` columns wide: 16 up to 264.
 pub fn size(rung: Rung) -> Option<Size> {
-    let cols = *COLS.get(rung as usize)?;
+    if rung as u16 >= RUNGS {
+        return None;
+    }
+    let cols = STEP * (rung as u16 + 2);
     Some(Size {
         cols,
         rows: rows_for(cols),
@@ -32,8 +37,8 @@ pub fn rows_for(cols: u16) -> u16 {
 /// Largest rung that fits inside `cols` x `rows` cells.
 pub fn best_fit(cols: u16, rows: u16) -> Option<Rung> {
     rungs()
-        .filter(|&r| {
-            let s = size(r).unwrap();
+        .take_while(|&r| {
+            let s = size(r).expect("rung in range");
             s.cols <= cols && s.rows <= rows
         })
         .last()
@@ -46,14 +51,14 @@ mod tests {
     #[test]
     fn rows_follow_aspect() {
         assert_eq!(
-            size(10),
+            size(18),
             Some(Size {
                 cols: 160,
                 rows: 45
             })
         );
         assert_eq!(size(2), Some(Size { cols: 32, rows: 9 }));
-        assert_eq!(size(COLS.len() as Rung), None);
+        assert_eq!(size(RUNGS as Rung), None);
     }
 
     #[test]
@@ -67,7 +72,7 @@ mod tests {
         );
         assert_eq!(
             best_fit(200, 20).and_then(size),
-            Some(Size { cols: 64, rows: 18 })
+            Some(Size { cols: 72, rows: 20 })
         );
         assert_eq!(best_fit(10, 10), None);
     }

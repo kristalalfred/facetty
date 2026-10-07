@@ -55,6 +55,21 @@ impl Signal {
         })
     }
 
+    pub fn register_sfu(&self, beat: SfuHeartbeat) {
+        let mut inner = self.lock();
+        if !inner.sfus.contains_key(&beat.id) {
+            info!(id = %beat.id, addr = %beat.media.addr, "media server registered");
+        }
+        inner.sfus.insert(
+            beat.id,
+            Sfu {
+                media: beat.media,
+                connections: beat.connections,
+                last_seen: Instant::now(),
+            },
+        );
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -114,18 +129,7 @@ async fn heartbeat(
     if !authorized {
         return StatusCode::UNAUTHORIZED;
     }
-    let mut inner = signal.lock();
-    if !inner.sfus.contains_key(&beat.id) {
-        info!(id = %beat.id, addr = %beat.media.addr, "media server registered");
-    }
-    inner.sfus.insert(
-        beat.id,
-        Sfu {
-            media: beat.media,
-            connections: beat.connections,
-            last_seen: Instant::now(),
-        },
-    );
+    signal.register_sfu(beat);
     StatusCode::NO_CONTENT
 }
 

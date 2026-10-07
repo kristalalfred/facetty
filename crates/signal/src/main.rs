@@ -7,7 +7,7 @@ use tracing::{info, warn};
 /// Signaling server: rooms, roster, chat, and handing out media server tokens.
 #[derive(Parser)]
 struct Args {
-    #[arg(long, env = "BITS_SIGNAL_LISTEN", default_value = "0.0.0.0:7000")]
+    #[arg(long, env = "BITS_SIGNAL_LISTEN", default_value = "0.0.0.0:8740")]
     listen: SocketAddr,
     #[arg(long, env = "BITS_SECRET", default_value = bits_proto::token::DEV_SECRET, hide_default_value = true)]
     secret: String,

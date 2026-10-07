@@ -11,14 +11,14 @@ use tracing::{info, warn};
 /// Media server: forwards ASCII video and Opus audio between call participants.
 #[derive(Parser)]
 struct Args {
-    #[arg(long, env = "BITS_SFU_LISTEN", default_value = "0.0.0.0:7100")]
+    #[arg(long, env = "BITS_SFU_LISTEN", default_value = "0.0.0.0:8741")]
     listen: SocketAddr,
     /// Address clients should dial, as `host:port`. Defaults to the listen
     /// port on 127.0.0.1.
     #[arg(long, env = "BITS_SFU_PUBLIC_ADDR")]
     public_addr: Option<String>,
     /// Signaling server to register with.
-    #[arg(long, env = "BITS_SIGNAL_URL", default_value = "http://127.0.0.1:7000")]
+    #[arg(long, env = "BITS_SIGNAL_URL", default_value = "http://127.0.0.1:8740")]
     signal: String,
     #[arg(long, env = "BITS_SECRET", default_value = bits_proto::token::DEV_SECRET, hide_default_value = true)]
     secret: String,
