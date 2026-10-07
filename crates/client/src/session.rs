@@ -34,6 +34,7 @@ pub enum Event {
     },
     Video {
         publisher: ParticipantId,
+        seq: u32,
         frame: Arc<Frame>,
     },
     EncodeRungs(Vec<Rung>),
@@ -269,6 +270,7 @@ async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSen
                 Ok(frame) => {
                     let _ = events.send(Event::Video {
                         publisher: msg.publisher,
+                        seq: msg.seq,
                         frame: Arc::new(frame),
                     });
                 }

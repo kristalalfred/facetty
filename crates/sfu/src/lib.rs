@@ -105,7 +105,7 @@ async fn serve_connection(conn: Connection, rooms: Arc<Rooms>, secret: &[u8]) ->
 
     let (control_tx, mut control_rx) = mpsc::unbounded_channel();
     control_tx.send(ServerControl::Welcome { participant: me })?;
-    let membership = rooms.join(&room, me, conn.clone(), control_tx);
+    let membership = Arc::new(rooms.join(&room, me, conn.clone(), control_tx));
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = control_rx.recv().await {
@@ -136,19 +136,27 @@ async fn read_control(recv: &mut quinn::RecvStream, membership: &room::Membershi
     Ok(())
 }
 
-async fn read_video(conn: &Connection, membership: &room::Membership) -> Result<()> {
+/// Each frame is read in its own task so a stream stalled on loss does not
+/// hold up the frames behind it.
+async fn read_video(conn: &Connection, membership: &Arc<room::Membership>) -> Result<()> {
     loop {
         let mut stream = conn.accept_uni().await?;
-        let bytes = match stream.read_to_end(media::MAX_VIDEO_FRAME).await {
-            Ok(b) => b,
-            Err(e) => {
-                debug!("dropped video stream: {e}");
-                continue;
-            }
-        };
-        let mut frame: VideoFrame = media::decode(&bytes)?;
-        frame.publisher = membership.participant();
-        membership.publish_video(frame.rung, Bytes::from(media::encode(&frame)));
+        let membership = membership.clone();
+        tokio::spawn(async move {
+            let bytes = match stream.read_to_end(media::MAX_VIDEO_FRAME).await {
+                Ok(b) => b,
+                Err(e) => {
+                    debug!("dropped video stream: {e}");
+                    return;
+                }
+            };
+            let Ok(mut frame) = media::decode::<VideoFrame>(&bytes) else {
+                debug!("undecodable video frame");
+                return;
+            };
+            frame.publisher = membership.participant();
+            membership.publish_video(frame.rung, Bytes::from(media::encode(&frame)));
+        });
     }
 }
 

@@ -115,7 +115,9 @@ async fn two_people_see_hear_and_chat() {
     alice_publisher.set_rungs(wanted);
 
     let (publisher, frame) = next_matching(&mut bob, |e| match e {
-        Event::Video { publisher, frame } => Some((publisher, frame)),
+        Event::Video {
+            publisher, frame, ..
+        } => Some((publisher, frame)),
         _ => None,
     })
     .await;

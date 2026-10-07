@@ -21,7 +21,7 @@ use crate::publisher::Publisher;
 use crate::session::{Command, Event};
 use crate::ui::{self, ChatLine, Palette, Tile};
 
-const SPEAKING_LEVEL: f32 = 0.04;
+const SPEAKING_LEVEL: f32 = 0.35;
 const CHAT_WIDTH: u16 = 38;
 const FLASH: Duration = Duration::from_secs(4);
 
@@ -35,7 +35,7 @@ pub struct App {
     room: String,
     me: Participant,
     others: BTreeMap<ParticipantId, Participant>,
-    frames: HashMap<ParticipantId, Arc<Frame>>,
+    frames: HashMap<ParticipantId, (u32, Arc<Frame>)>,
     subscriptions: HashMap<ParticipantId, Option<Rung>>,
     last_spoke: HashMap<ParticipantId, Instant>,
     chat: Vec<ChatLine>,
@@ -160,9 +160,17 @@ impl App {
                     text,
                 });
             }
-            Event::Video { publisher, frame } => {
-                if self.others.get(&publisher).is_some_and(|p| !p.video_off) {
-                    self.frames.insert(publisher, frame);
+            Event::Video {
+                publisher,
+                seq,
+                frame,
+            } => {
+                let newer = self
+                    .frames
+                    .get(&publisher)
+                    .is_none_or(|(last, _)| (seq.wrapping_sub(*last) as i32) > 0);
+                if newer && self.others.get(&publisher).is_some_and(|p| !p.video_off) {
+                    self.frames.insert(publisher, (seq, frame));
                 }
             }
             Event::EncodeRungs(rungs) => self.publisher.set_rungs(rungs),
@@ -379,7 +387,7 @@ impl App {
         };
         Tile {
             name: &p.name,
-            frame: self.frames.get(&id).map(|f| f.as_ref()),
+            frame: self.frames.get(&id).map(|(_, f)| f.as_ref()),
             mirror: false,
             muted: p.audio_muted,
             speaking,
