@@ -30,7 +30,7 @@ Use headphones. There is no echo cancellation, so speakers feed back into the mi
 | `m` | mute / unmute |
 | `v` | camera on / off |
 | `l` | grid / speaker view |
-| `t` | show / hide chat; `Enter` or `/` to type, `Esc` to stop |
+| `t` | open the chat and type, or hide it; `Enter` or `/` to type, `Esc` to stop |
 | `p` | palette: vivid, natural, mono, matrix |
 | `e`, `[`, `]` | edges on / off, exposure down / up (changes what others see) |
 | `q` | leave |

@@ -231,7 +231,11 @@ impl App {
                     View::Speaker => View::Grid,
                 }
             }
-            KeyCode::Char('t') => self.chat_open = !self.chat_open,
+            KeyCode::Char('t') if self.chat_open => self.chat_open = false,
+            KeyCode::Char('t') => {
+                self.chat_open = true;
+                self.start_typing();
+            }
             KeyCode::Enter | KeyCode::Char('/') => self.start_typing(),
             KeyCode::Char('p') => {
                 self.palette = self.palette.next();
