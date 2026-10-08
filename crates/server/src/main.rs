@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::Parser;
 use facetty_proto::signal::MediaServer;
 use facetty_sfu::Sfu;
-use facetty_signal::Signal;
+use facetty_signal::{Config, Signal};
 use tracing::info;
 
 /// Call server: call codes, rosters and chat over HTTP, video and audio over QUIC.
@@ -24,6 +24,14 @@ struct Args {
     /// Key required to create calls. Generated at startup when unset.
     #[arg(long, env = "FACETTY_HOST_KEY", hide_env_values = true)]
     host_key: Option<String>,
+    /// Let anyone create calls, without a host key.
+    #[arg(long, env = "FACETTY_OPEN", value_parser = clap::builder::BoolishValueParser::new())]
+    open: bool,
+    /// Most calls held at once. When full, the oldest call nobody is in is
+    /// dropped to make room.
+    #[arg(long, env = "FACETTY_MAX_CALLS", default_value_t = 1000,
+          value_parser = clap::value_parser!(u32).range(1..))]
+    max_calls: u32,
 }
 
 #[tokio::main]
@@ -35,15 +43,19 @@ async fn main() -> Result<()> {
         .init();
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Args::parse();
-    let host_key = match args.host_key {
-        Some(key) => key,
-        None => {
+    let host_key = match (args.open, args.host_key) {
+        (true, _) => None,
+        (false, Some(key)) => Some(key),
+        (false, None) => {
             let key = random_hex()?;
             eprintln!("host key for creating calls: {key}");
-            key
+            Some(key)
         }
     };
-    ensure!(!host_key.is_empty(), "FACETTY_HOST_KEY cannot be empty");
+    ensure!(
+        host_key.as_ref().is_none_or(|k| !k.is_empty()),
+        "FACETTY_HOST_KEY cannot be empty"
+    );
     let secret = random_hex()?;
 
     let sfu = Sfu::bind(args.media_listen, secret.as_bytes())?;
@@ -54,11 +66,18 @@ async fn main() -> Result<()> {
         cert_sha256: sfu.cert_sha256().to_string(),
     };
     info!(listen = %sfu.local_addr()?, addr = %media.addr, "media listening");
-    let signal = Signal::new(secret.as_bytes(), host_key.as_bytes(), media);
+    let signal = Signal::new(
+        secret.as_bytes(),
+        Config {
+            host_key: host_key.map(String::into_bytes),
+            max_calls: args.max_calls as usize,
+            media,
+        },
+    );
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
         .with_context(|| format!("binding {}", args.listen))?;
-    info!(listen = %listener.local_addr()?, "server up");
+    info!(listen = %listener.local_addr()?, open = args.open, max_calls = args.max_calls, "server up");
 
     tokio::select! {
         () = sfu.run() => bail!("media endpoint closed"),

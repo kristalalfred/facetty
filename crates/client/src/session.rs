@@ -92,29 +92,39 @@ pub fn ws_url(server: &str, room: &str, name: &str) -> Result<url::Url> {
     Ok(url)
 }
 
-pub async fn create_call(server: &str, host_key: &str) -> Result<CallInvite> {
+/// `host_key` can be `None` on servers that let anyone create calls.
+pub async fn create_call(server: &str, host_key: Option<&str>) -> Result<CallInvite> {
     let mut url = url::Url::parse(server).with_context(|| format!("bad server URL {server}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         bail!("creating a call requires an http:// or https:// server URL");
     }
-    if host_key.is_empty() {
+    if host_key.is_some_and(str::is_empty) {
         bail!("host key cannot be empty");
     }
     url.path_segments_mut()
         .map_err(|_| anyhow::anyhow!("server URL cannot have a path"))?
         .pop_if_empty()
         .push("rooms");
-    let response = reqwest::Client::builder()
+    let mut request = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(10))
         .build()?
-        .post(url)
-        .bearer_auth(host_key)
-        .send()
-        .await
-        .context("creating a call")?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        bail!("host key rejected; check FACETTY_HOST_KEY or --host-key");
+        .post(url);
+    if let Some(key) = host_key {
+        request = request.bearer_auth(key);
+    }
+    let response = request.send().await.context("creating a call")?;
+    match response.status() {
+        reqwest::StatusCode::UNAUTHORIZED if host_key.is_none() => {
+            bail!("this server needs a host key; pass --host-key or set FACETTY_HOST_KEY")
+        }
+        reqwest::StatusCode::UNAUTHORIZED => {
+            bail!("host key rejected; check FACETTY_HOST_KEY or --host-key")
+        }
+        reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+            bail!("every call on this server is in use; try again later")
+        }
+        _ => {}
     }
     Ok(response.error_for_status()?.json().await?)
 }

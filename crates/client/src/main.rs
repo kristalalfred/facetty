@@ -33,9 +33,9 @@ enum Cmd {
     Create {
         #[arg(long, env = "FACETTY_SERVER", default_value = "http://127.0.0.1:8740")]
         server: String,
-        /// Server host key for creating calls.
+        /// Server host key for creating calls. Open servers need none.
         #[arg(long, env = "FACETTY_HOST_KEY", hide_env_values = true)]
-        host_key: String,
+        host_key: Option<String>,
     },
     /// Join a call using its invitation code.
     Join {
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     match Cli::parse().command {
         Cmd::Create { server, host_key } => {
-            let invite = session::create_call(&server, &host_key).await?;
+            let invite = session::create_call(&server, host_key.as_deref()).await?;
             println!("{}", invite.code);
             Ok(())
         }

@@ -20,10 +20,13 @@ async fn start_servers() -> String {
     let sfu = Arc::new(facetty_sfu::Sfu::bind("127.0.0.1:0".parse().unwrap(), SECRET).unwrap());
     let signal = facetty_signal::Signal::new(
         SECRET,
-        HOST_KEY.as_bytes(),
-        MediaServer {
-            addr: format!(":{}", sfu.local_addr().unwrap().port()),
-            cert_sha256: sfu.cert_sha256().to_string(),
+        facetty_signal::Config {
+            host_key: Some(HOST_KEY.as_bytes().to_vec()),
+            max_calls: 100,
+            media: MediaServer {
+                addr: format!(":{}", sfu.local_addr().unwrap().port()),
+                cert_sha256: sfu.cert_sha256().to_string(),
+            },
         },
     );
     tokio::spawn(async move { sfu.run().await });
@@ -69,7 +72,10 @@ impl Read for Tone {
 #[tokio::test(flavor = "multi_thread")]
 async fn invited_callers_see_hear_chat_and_react_with_other_calls_isolated() {
     let server = start_servers().await;
-    let code = session::create_call(&server, HOST_KEY).await.unwrap().code;
+    let code = session::create_call(&server, Some(HOST_KEY))
+        .await
+        .unwrap()
+        .code;
 
     let (alice_video, alice_video_rx) = mpsc::channel(4);
     let mut alice = session::connect(&server, &code, "alice", alice_video_rx)
@@ -93,7 +99,10 @@ async fn invited_callers_see_hear_chat_and_react_with_other_calls_isolated() {
     assert_eq!(bob.participants[0].name, "alice");
     let alice_id = alice.me.id;
 
-    let other_code = session::create_call(&server, HOST_KEY).await.unwrap().code;
+    let other_code = session::create_call(&server, Some(HOST_KEY))
+        .await
+        .unwrap()
+        .code;
     assert_ne!(other_code, code);
     let (_carol_video, carol_video_rx) = mpsc::channel(4);
     let mut carol = session::connect(&server, &other_code, "carol", carol_video_rx)
@@ -238,8 +247,12 @@ async fn creation_needs_a_host_key_and_joining_needs_an_existing_code() {
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
-    let error = session::create_call(&server, "wrong").await.unwrap_err();
+    let error = session::create_call(&server, Some("wrong"))
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("host key rejected"));
+    let error = session::create_call(&server, None).await.unwrap_err();
+    assert!(error.to_string().contains("needs a host key"));
     let response = reqwest::get(format!("{server}/rooms/lobby")).await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 
@@ -250,7 +263,10 @@ async fn creation_needs_a_host_key_and_joining_needs_an_existing_code() {
     };
     assert!(error.to_string().contains("invalid or expired call code"));
 
-    let code = session::create_call(&server, HOST_KEY).await.unwrap().code;
+    let code = session::create_call(&server, Some(HOST_KEY))
+        .await
+        .unwrap()
+        .code;
     let (_video, video_rx) = mpsc::channel(4);
     let session = session::connect(&server, &code.to_ascii_uppercase(), "guest", video_rx)
         .await

@@ -19,10 +19,20 @@ use tracing::{debug, info, warn};
 const INVITE_TTL: Duration = Duration::from_secs(24 * 3600);
 const INVALID_CODE: &str = "invalid or expired call code";
 
+pub struct Config {
+    /// Key required to create calls. `None` lets anyone create them.
+    pub host_key: Option<Vec<u8>>,
+    /// Most calls held at once. When full, creating a call drops the oldest
+    /// call nobody is in, and fails if every call has someone in it.
+    pub max_calls: usize,
+    /// Media server handed to every caller. An `addr` of `:port` means that
+    /// port on the host the caller used to reach us.
+    pub media: MediaServer,
+}
+
 pub struct Signal {
     secret: Vec<u8>,
-    host_key: Vec<u8>,
-    media: MediaServer,
+    config: Config,
     next_id: AtomicU32,
     state: Mutex<Inner>,
 }
@@ -42,29 +52,46 @@ struct Member {
     events: mpsc::UnboundedSender<ServerEvent>,
 }
 
+#[derive(Debug)]
+enum CreateError {
+    Full,
+    Random(getrandom::Error),
+}
+
 impl Signal {
-    /// `media` is the media server handed to every caller. An `addr` of
-    /// `:port` means that port on the host the caller used to reach us.
-    pub fn new(secret: &[u8], host_key: &[u8], media: MediaServer) -> Arc<Self> {
+    pub fn new(secret: &[u8], config: Config) -> Arc<Self> {
         assert!(!secret.is_empty(), "server secret cannot be empty");
-        assert!(!host_key.is_empty(), "host key cannot be empty");
+        assert!(
+            config.host_key.as_ref().is_none_or(|k| !k.is_empty()),
+            "host key cannot be empty"
+        );
+        assert!(config.max_calls > 0, "max calls must be at least 1");
         Arc::new(Self {
             secret: secret.to_vec(),
-            host_key: host_key.to_vec(),
-            media,
+            config,
             next_id: AtomicU32::new(1),
             state: Mutex::new(Inner::default()),
         })
     }
 
-    fn create_call(&self) -> Result<CallInvite, getrandom::Error> {
+    fn create_call(&self) -> Result<CallInvite, CreateError> {
         let mut inner = self.lock();
         let now = unix_now();
         inner
             .rooms
             .retain(|_, room| room.expires_unix > now || !room.members.is_empty());
+        if inner.rooms.len() >= self.config.max_calls {
+            let oldest_empty = inner
+                .rooms
+                .iter()
+                .filter(|(_, room)| room.members.is_empty())
+                .min_by_key(|(_, room)| room.expires_unix)
+                .map(|(code, _)| code.clone())
+                .ok_or(CreateError::Full)?;
+            inner.rooms.remove(&oldest_empty);
+        }
         let code = loop {
-            let code = invite_code()?;
+            let code = invite_code().map_err(CreateError::Random)?;
             if !inner.rooms.contains_key(&code) {
                 break code;
             }
@@ -95,7 +122,9 @@ pub fn router(signal: Arc<Signal>) -> Router {
 }
 
 async fn create_call(State(signal): State<Arc<Signal>>, headers: HeaderMap) -> Response {
-    if !authorized(&headers, &signal.host_key) {
+    if let Some(key) = &signal.config.host_key
+        && !authorized(&headers, key)
+    {
         return (
             StatusCode::UNAUTHORIZED,
             "host key required to create a call",
@@ -104,7 +133,12 @@ async fn create_call(State(signal): State<Arc<Signal>>, headers: HeaderMap) -> R
     }
     match signal.create_call() {
         Ok(invite) => (StatusCode::CREATED, Json(invite)).into_response(),
-        Err(e) => {
+        Err(CreateError::Full) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "every call on this server is in use; try again later",
+        )
+            .into_response(),
+        Err(CreateError::Random(e)) => {
             warn!("cannot generate a call code: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "cannot create a call").into_response()
         }
@@ -220,7 +254,7 @@ fn admit(
     host: Option<&str>,
     events: mpsc::UnboundedSender<ServerEvent>,
 ) -> Result<ServerEvent, String> {
-    let mut media = signal.media.clone();
+    let mut media = signal.config.media.clone();
     if media.addr.starts_with(':') {
         let host = host.ok_or("cannot tell which host the media server is on")?;
         media.addr = format!("{host}{}", media.addr);
@@ -414,15 +448,22 @@ mod tests {
         }
     }
 
-    fn signal() -> Arc<Signal> {
+    fn signal_with(host_key: Option<&[u8]>, max_calls: usize) -> Arc<Signal> {
         Signal::new(
             b"server-secret",
-            b"host-key",
-            MediaServer {
-                addr: "localhost:8741".into(),
-                cert_sha256: "test".into(),
+            Config {
+                host_key: host_key.map(<[u8]>::to_vec),
+                max_calls,
+                media: MediaServer {
+                    addr: "localhost:8741".into(),
+                    cert_sha256: "test".into(),
+                },
             },
         )
+    }
+
+    fn signal() -> Arc<Signal> {
+        signal_with(Some(b"host-key"), 100)
     }
 
     #[tokio::test]
@@ -446,6 +487,51 @@ mod tests {
             create_call(State(signal.clone()), headers).await.status(),
             StatusCode::CREATED
         );
+    }
+
+    #[tokio::test]
+    async fn open_servers_create_calls_without_a_key() {
+        let signal = signal_with(None, 100);
+        assert_eq!(
+            create_call(State(signal), HeaderMap::new()).await.status(),
+            StatusCode::CREATED
+        );
+    }
+
+    #[tokio::test]
+    async fn full_servers_drop_the_oldest_empty_call_but_never_an_occupied_one() {
+        let signal = signal_with(None, 3);
+        let occupied = signal.create_call().unwrap();
+        let (events, _rx1) = mpsc::unbounded_channel();
+        admit(&signal, &occupied.code, participant(1), None, events).unwrap();
+        let oldest = signal.create_call().unwrap();
+        signal
+            .lock()
+            .rooms
+            .get_mut(&oldest.code)
+            .unwrap()
+            .expires_unix -= 1;
+        let newer = signal.create_call().unwrap();
+        let newest = signal.create_call().unwrap();
+        {
+            let inner = signal.lock();
+            assert!(!inner.rooms.contains_key(&oldest.code));
+            for kept in [&occupied, &newer, &newest] {
+                assert!(inner.rooms.contains_key(&kept.code));
+            }
+        }
+
+        let (events, _rx2) = mpsc::unbounded_channel();
+        admit(&signal, &newer.code, participant(2), None, events).unwrap();
+        let (events, _rx3) = mpsc::unbounded_channel();
+        admit(&signal, &newest.code, participant(3), None, events).unwrap();
+        assert_eq!(
+            create_call(State(signal.clone()), HeaderMap::new())
+                .await
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(signal.lock().rooms.len(), 3);
     }
 
     #[tokio::test]

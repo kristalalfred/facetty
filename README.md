@@ -66,6 +66,8 @@ installed, a file (looped) or a URL.
 | Media listener | `FACETTY_MEDIA_LISTEN` | `0.0.0.0:8741` (UDP) |
 | Media address for clients | `FACETTY_MEDIA_ADDR` | Server host with the media listener's port |
 | Key for creating calls | `FACETTY_HOST_KEY` | Generated and printed at startup |
+| Let anyone create calls | `FACETTY_OPEN` | `false` |
+| Most calls held at once | `FACETTY_MAX_CALLS` | `1000` |
 
 `FACETTY_MEDIA_ADDR` takes `host:port`, or `:port` to keep the host clients
 used. Set it when clients reach UDP on a different port than the server listens
@@ -87,6 +89,10 @@ clients find the media port on the host they used to reach the server. Media
 uses QUIC over UDP and does not go through the proxy.
 
 ### Call permissions
+
+With `FACETTY_OPEN=true`, anyone can create calls without a host key. When a
+server holds `FACETTY_MAX_CALLS` calls, creating one drops the oldest call
+nobody is in, and fails if every call has someone in it.
 
 Create more calls with the same host key and server URL. Each code admits guests
 only to its own call; room names cannot create or join calls. Chat, participant
