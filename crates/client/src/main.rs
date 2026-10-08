@@ -58,9 +58,9 @@ enum Cmd {
         /// Speaker name (or part of it).
         #[arg(long)]
         speaker: Option<String>,
-        /// Join without the intro animation.
-        #[arg(long, env = "FACETTY_NO_SPLASH", value_parser = BoolishValueParser::new())]
-        no_splash: bool,
+        /// Open on the intro animation; Enter joins.
+        #[arg(long, env = "FACETTY_INTRO", value_parser = BoolishValueParser::new())]
+        intro: bool,
     },
     /// Join headless and publish a test pattern, a file, or a stream.
     Bot {
@@ -120,12 +120,12 @@ async fn main() -> Result<()> {
             no_audio,
             mic,
             speaker,
-            no_splash,
+            intro,
         } => {
             log_to_file()?;
             let audio = (!no_audio).then_some((mic, speaker));
             let code = code.to_ascii_lowercase();
-            join(code, conn, video, !no_video, audio, !no_splash).await
+            join(code, conn, video, !no_video, audio, intro).await
         }
         Cmd::Bot {
             code,

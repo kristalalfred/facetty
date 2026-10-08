@@ -52,8 +52,8 @@ kristalalfred/tap` allows it.
 
 Set `FACETTY_SERVER` to leave out `--server`. On macOS, allow camera,
 microphone, and local-network access when prompted. Use headphones; there is no
-echo cancellation. `join` opens on an intro; press Enter to join, or pass
-`--no-splash` (or set `FACETTY_NO_SPLASH=1`) to skip it.
+echo cancellation. For demos, `join --intro` (or `FACETTY_INTRO=1`) opens on an
+intro animation; press Enter to join.
 
 `facetty preview` checks your camera without joining a call. Press `d` in a
 call or preview to switch camera, microphone, or speaker. `facetty devices`
