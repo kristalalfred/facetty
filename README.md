@@ -2,19 +2,40 @@
 
 Terminal video calls with colored ASCII video and audio.
 
-## Install the client
+## Join a call
 
 ```sh
 brew install kristalalfred/tap/facetty
+facetty join <code> --server <server-url>
 ```
 
-Without Homebrew, on macOS or Linux:
+The host gives you the code and the server URL. Without Homebrew, see
+[other installers](#other-installers).
+
+## Host calls
+
+On a machine with Docker, open TCP 8740 and UDP 8741, then run:
+
+```sh
+docker run -d --name facetty --restart unless-stopped \
+  -p 8740:8740 -p 8741:8741/udp -e FACETTY_HOST_KEY=<secret> \
+  ghcr.io/kristalalfred/facetty-server
+facetty create --host-key <secret> --server http://<host>:8740
+```
+
+`<secret>` is any long random string, for example from `openssl rand -hex 32`.
+`create` prints a call code; give guests the code and `http://<host>:8740`.
+Outside a trusted LAN, [add TLS](#tls).
+
+## Other installers
+
+macOS or Linux:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/KristalAlfred/facetty/releases/latest/download/facetty-installer.sh | sh
 ```
 
-On Windows, in PowerShell:
+Windows, in PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/KristalAlfred/facetty/releases/latest/download/facetty-installer.ps1 | iex"
@@ -23,11 +44,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/KristalAlfred/face
 Archives for each platform are on the [releases page][releases]. On Linux the
 client needs ALSA (`libasound2`).
 
-Join a call with the code and server URL the host gave you:
-
-```sh
-facetty join <code> --server https://calls.example.com
-```
+## Client
 
 Set `FACETTY_SERVER` to leave out `--server`. On macOS, allow camera,
 microphone, and local-network access when prompted. Use headphones; there is no
@@ -38,41 +55,10 @@ lists devices and their selection flags; `--video camera:<index>` also takes
 part of a camera's name. `--video` also accepts `test`, and with `ffmpeg`
 installed, a file (looped) or a URL.
 
-## Host a server
+## Server
 
-```sh
-docker run -d --name facetty --restart unless-stopped \
-  -e FACETTY_HOST_KEY="$(openssl rand -hex 32)" \
-  -p 8740:8740 -p 8741:8741/udp \
-  ghcr.io/kristalalfred/facetty-server
-```
-
-Or, with this repository's `compose.yaml`:
-
-```sh
-FACETTY_HOST_KEY="$(openssl rand -hex 32)" docker compose up -d
-```
-
-Open TCP 8740 and UDP 8741. Keep the host key; you need it to create calls:
-
-```sh
-facetty create --host-key <host-key> --server http://<host>:8740
-```
-
-This prints a call code for guests to use with `facetty join`.
-
-Outside a trusted LAN, put TCP 8740 behind a TLS proxy so host keys and call
-codes are encrypted, and give guests the `https://` URL. With Caddy:
-
-```
-calls.example.com {
-    reverse_proxy 127.0.0.1:8740
-}
-```
-
-The proxy must pass the `Host` header through, as Caddy does by default:
-clients find the media port on the host they used to reach the server. Media
-uses QUIC over UDP and does not go through the proxy.
+`compose.yaml` in this repository runs the same container:
+`FACETTY_HOST_KEY=<secret> docker compose up -d`.
 
 | Setting | Environment variable | Default |
 |---|---|---|
@@ -85,7 +71,22 @@ uses QUIC over UDP and does not go through the proxy.
 used. Set it when clients reach UDP on a different port than the server listens
 on, for example through a port mapping.
 
-## Call permissions
+### TLS
+
+Put TCP 8740 behind a TLS proxy so host keys and call codes are encrypted, and
+give guests the `https://` URL. With Caddy:
+
+```
+calls.example.com {
+    reverse_proxy 127.0.0.1:8740
+}
+```
+
+The proxy must pass the `Host` header through, as Caddy does by default:
+clients find the media port on the host they used to reach the server. Media
+uses QUIC over UDP and does not go through the proxy.
+
+### Call permissions
 
 Create more calls with the same host key and server URL. Each code admits guests
 only to its own call; room names cannot create or join calls. Chat, participant
