@@ -30,10 +30,15 @@ Use headphones. There is no echo cancellation, so speakers feed back into the mi
 | `m` | mute / unmute |
 | `v` | camera on / off |
 | `l` | grid / speaker view |
-| `t` | show / hide chat; `Enter` or `/` to type |
+| `t` | show / hide chat; `Enter` or `/` to type, `Esc` to stop |
 | `p` | palette: vivid, natural, mono, matrix |
 | `e`, `[`, `]` | edges on / off, exposure down / up (changes what others see) |
 | `q` | leave |
+
+In the chat, drag to select text; it is copied when you let go. Click a link
+to open it. The mouse wheel and `PgUp`/`PgDn` scroll. bits takes the mouse
+while it runs, so the terminal's own selection needs a key held while dragging
+(Option in iTerm2, Shift in most other terminals).
 
 ## Calling someone on your network
 

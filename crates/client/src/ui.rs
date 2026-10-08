@@ -3,7 +3,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Palette {
@@ -143,66 +143,6 @@ fn draw_frame(
                 .set_char(ch)
                 .set_fg(color(palette.rgb(cell.rgb), truecolor));
         }
-    }
-}
-
-pub struct ChatLine {
-    pub name: Option<String>,
-    pub text: String,
-}
-
-pub fn draw_chat(buf: &mut Buffer, area: Rect, lines: &[ChatLine], input: Option<&str>) {
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(Color::DarkGray))
-        .title(" chat ");
-    let inner = block.inner(area);
-    block.render(area, buf);
-
-    let mut text: Vec<Line> = lines
-        .iter()
-        .map(|l| match &l.name {
-            Some(name) => Line::from(vec![
-                Span::styled(format!("{name}: "), Style::new().fg(Color::Cyan)),
-                Span::raw(l.text.clone()),
-            ]),
-            None => Line::styled(l.text.clone(), Style::new().fg(Color::DarkGray)),
-        })
-        .collect();
-    let input_rows = if input.is_some() { 1 } else { 0 };
-    let log_area = Rect {
-        height: inner.height.saturating_sub(input_rows),
-        ..inner
-    };
-    let paragraph = Paragraph::new(std::mem::take(&mut text)).wrap(Wrap { trim: false });
-    let total = paragraph.line_count(log_area.width) as u16;
-    paragraph
-        .scroll((total.saturating_sub(log_area.height), 0))
-        .render(log_area, buf);
-
-    if let Some(input) = input {
-        let width = inner.width.saturating_sub(3) as usize;
-        let visible: String = input
-            .chars()
-            .rev()
-            .take(width)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        Paragraph::new(Line::from(vec![
-            Span::styled("> ", Style::new().fg(Color::Yellow)),
-            Span::raw(visible),
-            Span::styled("_", Style::new().add_modifier(Modifier::SLOW_BLINK)),
-        ]))
-        .render(
-            Rect {
-                y: inner.bottom().saturating_sub(1),
-                height: 1,
-                ..inner
-            },
-            buf,
-        );
     }
 }
 

@@ -8,7 +8,7 @@ use bits_proto::ParticipantId;
 use bits_proto::ladder::{self, Rung};
 use bits_proto::signal::Participant;
 use crossterm::event::{
-    Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
 };
 use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
@@ -16,13 +16,16 @@ use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use tokio::sync::mpsc;
 
+use crate::chat::{self, Chat};
+use crate::desktop;
 use crate::layout;
 use crate::publisher::Publisher;
 use crate::session::{Command, Event};
-use crate::ui::{self, ChatLine, Palette, Tile};
+use crate::ui::{self, Palette, Tile};
 
 const SPEAKING_LEVEL: f32 = 0.35;
 const CHAT_WIDTH: u16 = 38;
+const MIN_CHAT_WIDTH: u16 = 20;
 const FLASH: Duration = Duration::from_secs(4);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,7 +41,7 @@ pub struct App {
     frames: HashMap<ParticipantId, (u32, Arc<Frame>)>,
     subscriptions: HashMap<ParticipantId, Option<Rung>>,
     last_spoke: HashMap<ParticipantId, Instant>,
-    chat: Vec<ChatLine>,
+    chat: Chat,
     chat_open: bool,
     input: Option<String>,
     view: View,
@@ -77,7 +80,7 @@ impl App {
             frames: HashMap::new(),
             subscriptions: HashMap::new(),
             last_spoke: HashMap::new(),
-            chat: Vec::new(),
+            chat: Chat::default(),
             chat_open: false,
             input: None,
             view: View::Grid,
@@ -111,6 +114,8 @@ impl App {
             tokio::select! {
                 term = input.next() => match term {
                     Some(Ok(TermEvent::Key(key))) if key.kind != KeyEventKind::Release => self.on_key(key),
+                    Some(Ok(TermEvent::Mouse(mouse))) => self.on_mouse(mouse),
+                    Some(Ok(TermEvent::Paste(text))) => self.on_paste(&text),
                     Some(Ok(_)) => {}
                     Some(Err(e)) => return Err(e.into()),
                     None => break,
@@ -153,12 +158,9 @@ impl App {
             }
             Event::Chat { name, text } => {
                 if !self.chat_open {
-                    self.flash = Some((format!("{name}: {text}"), Instant::now()));
+                    self.flash(format!("{name}: {text}"));
                 }
-                self.chat.push(ChatLine {
-                    name: Some(name),
-                    text,
-                });
+                self.chat.push(Some(&name), &text);
             }
             Event::Video {
                 publisher,
@@ -186,12 +188,17 @@ impl App {
             self.quit = true;
             return;
         }
+        if let KeyCode::PageUp | KeyCode::PageDown = key.code {
+            self.chat.scroll_page(key.code == KeyCode::PageUp);
+            return;
+        }
         if let Some(input) = &mut self.input {
             match key.code {
                 KeyCode::Enter => {
                     let text = std::mem::take(input);
-                    self.input = None;
-                    if !text.trim().is_empty() {
+                    if text.trim().is_empty() {
+                        self.input = None;
+                    } else {
                         self.send(Command::Chat(text));
                     }
                 }
@@ -225,10 +232,7 @@ impl App {
                 }
             }
             KeyCode::Char('t') => self.chat_open = !self.chat_open,
-            KeyCode::Enter | KeyCode::Char('/') if self.commands.is_some() => {
-                self.chat_open = true;
-                self.input = Some(String::new());
-            }
+            KeyCode::Enter | KeyCode::Char('/') => self.start_typing(),
             KeyCode::Char('p') => {
                 self.palette = self.palette.next();
                 self.notify(format!("palette: {}", self.palette.name()));
@@ -252,6 +256,36 @@ impl App {
         }
     }
 
+    fn on_mouse(&mut self, mouse: MouseEvent) {
+        match self.chat.on_mouse(mouse) {
+            Some(chat::Action::Copy(text)) => match desktop::copy(&text) {
+                Ok(()) => self.flash(format!("copied {} characters", text.chars().count())),
+                Err(e) => self.flash(format!("copy failed: {e:#}")),
+            },
+            Some(chat::Action::Open(url)) => {
+                if let Err(e) = desktop::open(&url) {
+                    self.flash(format!("could not open link: {e:#}"));
+                }
+            }
+            Some(chat::Action::Type) => self.start_typing(),
+            None => {}
+        }
+    }
+
+    fn on_paste(&mut self, text: &str) {
+        self.start_typing();
+        if let Some(input) = &mut self.input {
+            input.extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
+        }
+    }
+
+    fn start_typing(&mut self) {
+        if self.commands.is_some() {
+            self.chat_open = true;
+            self.input.get_or_insert_with(String::new);
+        }
+    }
+
     fn draw(&mut self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
         let now = Instant::now();
         if let Some(audio) = &self.audio {
@@ -271,14 +305,22 @@ impl App {
             height: area.height.saturating_sub(1),
             ..area
         };
-        if self.chat_open && stage.width > CHAT_WIDTH * 2 {
-            stage.width -= CHAT_WIDTH;
-            let chat = Rect {
+        let chat_width = CHAT_WIDTH.min(stage.width / 2);
+        if self.chat_open && chat_width >= MIN_CHAT_WIDTH {
+            stage.width -= chat_width;
+            let area = Rect {
                 x: stage.right(),
-                width: CHAT_WIDTH,
+                width: chat_width,
                 ..stage
             };
-            ui::draw_chat(buf, chat, &self.chat, self.input.as_deref());
+            let input = match (&self.input, &self.commands) {
+                (Some(text), _) => chat::Input::Typing(text),
+                (None, Some(_)) => chat::Input::Idle,
+                (None, None) => chat::Input::Off,
+            };
+            self.chat.render(area, buf, input);
+        } else {
+            self.chat.hide();
         }
 
         let order = self.tile_order();
@@ -440,10 +482,11 @@ impl App {
     }
 
     fn notify(&mut self, msg: String) {
-        self.chat.push(ChatLine {
-            name: None,
-            text: msg.clone(),
-        });
+        self.chat.push(None, &msg);
+        self.flash(msg);
+    }
+
+    fn flash(&mut self, msg: String) {
         self.flash = Some((msg, Instant::now()));
     }
 

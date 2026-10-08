@@ -1,3 +1,4 @@
+use std::io;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -5,6 +6,10 @@ use anyhow::{Context, Result};
 use bits_audio::{Engine, Input, Options, Output};
 use bits_proto::signal::Participant;
 use clap::{Args, Parser, Subcommand};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
+use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -167,16 +172,36 @@ async fn join(
         notice,
         mirror_self,
     });
-    let mut terminal = ratatui::init();
+    let mut terminal = init_terminal();
     let mut session = session;
     let events = std::mem::replace(&mut session.events, mpsc::unbounded_channel().1);
     let result = app.run(&mut terminal, Some(events)).await;
-    ratatui::restore();
+    restore_terminal();
     session.close().await;
     if let Some(reason) = result? {
         eprintln!("disconnected: {reason}");
     }
     Ok(())
+}
+
+fn init_terminal() -> DefaultTerminal {
+    let terminal = ratatui::init();
+    let _ = crossterm::execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        release_mouse_and_paste();
+        hook(info);
+    }));
+    terminal
+}
+
+fn restore_terminal() {
+    release_mouse_and_paste();
+    ratatui::restore();
+}
+
+fn release_mouse_and_paste() {
+    let _ = crossterm::execute!(io::stdout(), DisableBracketedPaste, DisableMouseCapture);
 }
 
 async fn preview(video: VideoArgs) -> Result<()> {
