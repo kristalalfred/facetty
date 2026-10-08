@@ -14,7 +14,8 @@ use tokio::sync::mpsc;
 use tracing::info;
 
 use bits::app::{App, Setup};
-use bits::capture::{self, Source};
+use bits::camera;
+use bits::capture::Source;
 use bits::publisher::Publisher;
 use bits::session::{self, Event};
 
@@ -63,7 +64,7 @@ enum Cmd {
         conn: ConnArgs,
         #[command(flatten)]
         video: VideoArgs,
-        /// Audio to publish: an ffmpeg input (file or URL) or "tone".
+        /// Audio to publish: "tone", or a file or URL that ffmpeg can open.
         #[arg(long)]
         audio: Option<String>,
     },
@@ -87,7 +88,7 @@ struct ConnArgs {
 
 #[derive(Args)]
 struct VideoArgs {
-    /// "camera", "camera:<device>", "test", or any ffmpeg input (file, srt://, rtmp://, ...).
+    /// "camera", "camera:<index or name>", "test", or a file or URL that ffmpeg can open (srt://, rtmp://, ...).
     #[arg(long, default_value = "camera")]
     video: String,
     #[arg(long, default_value_t = 15)]
@@ -255,17 +256,16 @@ async fn bot(room: String, conn: ConnArgs, video: VideoArgs, audio: Option<Strin
     );
     let publisher = Publisher::start(Source::parse(&video.video), video.fps, video_tx, true);
 
-    let pcm = audio.as_deref().map(spawn_pcm).transpose()?;
-    let input = match &pcm {
-        Some(child) => Input::Pcm(Box::new(
-            child
-                .lock()
-                .unwrap()
-                .stdout
-                .take()
-                .context("ffmpeg stdout")?,
-        )),
+    let mut pcm = None;
+    let input = match audio.as_deref() {
         None => Input::None,
+        Some("tone") => Input::Tone,
+        Some(source) => {
+            let child = spawn_pcm(source)?;
+            let stdout = child.lock().unwrap().stdout.take();
+            pcm = Some(child);
+            Input::Pcm(Box::new(stdout.context("ffmpeg stdout")?))
+        }
     };
     let _engine = Engine::start(
         Options {
@@ -310,7 +310,6 @@ fn spawn_pcm(spec: &str) -> Result<Arc<Mutex<Child>>> {
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin"]);
     match spec {
-        "tone" => cmd.args(["-f", "lavfi", "-i", "sine=frequency=440:beep_factor=4"]),
         url if url.contains("://") => cmd.args(["-i", url]),
         path => cmd.args(["-stream_loop", "-1", "-i", path]),
     };
@@ -324,12 +323,12 @@ fn spawn_pcm(spec: &str) -> Result<Arc<Mutex<Child>>> {
 
 fn devices() -> Result<()> {
     println!("cameras (use --video camera:<index>):");
-    let cameras = capture::list_cameras();
+    let cameras = camera::list();
     if cameras.is_empty() {
-        println!("  none found (needs ffmpeg; listing only works on macOS)");
+        println!("  none found");
     }
-    for c in cameras {
-        println!("  {c}");
+    for (i, name) in cameras.iter().enumerate() {
+        println!("  [{i}] {name}");
     }
     let (inputs, outputs) = bits_audio::list_devices()?;
     println!("microphones (use --mic <name>):");

@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use bits_ascii::Image;
 
+use crate::camera;
+
 pub const WIDTH: usize = 640;
 pub const HEIGHT: usize = 360;
 
@@ -55,7 +57,8 @@ impl Capture {
             .name("capture".into())
             .spawn(move || match source {
                 Source::Test => test_pattern(&worker),
-                source => run_ffmpeg(&worker, &source),
+                Source::Camera(device) => run_camera(&worker, &device),
+                Source::Input(input) => run_ffmpeg(&worker, &input),
             })
             .expect("spawn capture thread");
         Self { shared }
@@ -81,53 +84,32 @@ impl Drop for Capture {
     }
 }
 
-fn ffmpeg_input_args(source: &Source) -> Vec<String> {
-    let mut args: Vec<String> = Vec::new();
-    match source {
-        Source::Camera(device) => {
-            if cfg!(target_os = "macos") {
-                args.extend(
-                    [
-                        "-f",
-                        "avfoundation",
-                        "-framerate",
-                        "30",
-                        "-video_size",
-                        "1280x720",
-                    ]
-                    .map(String::from),
-                );
-                args.extend(["-i".into(), format!("{device}:none")]);
-            } else if cfg!(target_os = "windows") {
-                args.extend(["-f", "dshow", "-i"].map(String::from));
-                args.push(format!("video={device}"));
-            } else {
-                let path = if device.starts_with('/') {
-                    device.clone()
-                } else {
-                    format!("/dev/video{device}")
-                };
-                args.extend(["-f", "v4l2", "-framerate", "30", "-i"].map(String::from));
-                args.push(path);
-            }
-        }
-        Source::Input(input) if input.contains("://") => {
-            args.extend(["-i".into(), input.clone()]);
-        }
-        Source::Input(path) => {
-            args.extend(["-re", "-stream_loop", "-1", "-i"].map(String::from));
-            args.push(path.clone());
-        }
-        Source::Test => unreachable!("test pattern does not use ffmpeg"),
+fn run_camera(shared: &Shared, device: &str) {
+    let mut seq = 0u64;
+    let result = camera::run(device, &shared.stop, |image| {
+        seq += 1;
+        *shared.latest.lock().unwrap() = Some((seq, Arc::new(image)));
+    });
+    if let Err(e) = result {
+        *shared.error.lock().unwrap() = Some(format!("{e:#}"));
     }
-    args
 }
 
-fn run_ffmpeg(shared: &Shared, source: &Source) {
+fn ffmpeg_input_args(input: &str) -> Vec<String> {
+    if input.contains("://") {
+        vec!["-i".into(), input.into()]
+    } else {
+        ["-re", "-stream_loop", "-1", "-i", input]
+            .map(String::from)
+            .to_vec()
+    }
+}
+
+fn run_ffmpeg(shared: &Shared, input: &str) {
     let filter = format!("crop='min(iw,ih*16/9)':'min(ih,iw*9/16)',scale={WIDTH}:{HEIGHT}");
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-loglevel", "error", "-nostdin"])
-        .args(ffmpeg_input_args(source))
+        .args(ffmpeg_input_args(input))
         .args([
             "-an", "-vf", &filter, "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
         ])
@@ -227,31 +209,39 @@ pub fn draw_test_pattern(t: f32) -> Image {
     Image::new(WIDTH, HEIGHT, rgb)
 }
 
-/// Camera names as ffmpeg reports them, best effort.
-pub fn list_cameras() -> Vec<String> {
-    if !cfg!(target_os = "macos") {
-        return Vec::new();
+/// Center-crops a `width` x `height` picture to 16:9 and scales it to
+/// `WIDTH` x `HEIGHT`, averaging the source pixels under each output pixel.
+pub(crate) fn fit(width: usize, height: usize, pixel: impl Fn(usize, usize) -> [u8; 3]) -> Image {
+    let crop_width = width.min(height * 16 / 9);
+    let crop_height = height.min(width * 9 / 16);
+    let columns = spans((width - crop_width) / 2, crop_width, WIDTH);
+    let rows = spans((height - crop_height) / 2, crop_height, HEIGHT);
+    let mut rgb = Vec::with_capacity(WIDTH * HEIGHT * 3);
+    for &(y0, y1) in &rows {
+        for &(x0, x1) in &columns {
+            let mut sum = [0u32; 3];
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    for (s, c) in sum.iter_mut().zip(pixel(x, y)) {
+                        *s += c as u32;
+                    }
+                }
+            }
+            let count = ((y1 - y0) * (x1 - x0)) as u32;
+            rgb.extend(sum.map(|s| (s / count) as u8));
+        }
     }
-    let Ok(out) = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-f",
-            "avfoundation",
-            "-list_devices",
-            "true",
-            "-i",
-            "",
-        ])
-        .output()
-    else {
-        return Vec::new();
-    };
-    let text = String::from_utf8_lossy(&out.stderr);
-    text.lines()
-        .skip_while(|l| !l.contains("video devices"))
-        .skip(1)
-        .take_while(|l| !l.contains("audio devices"))
-        .filter_map(|l| l.split_once("] [").map(|(_, rest)| format!("[{rest}")))
+    Image::new(WIDTH, HEIGHT, rgb)
+}
+
+/// Splits `len` source pixels from `start` into `out` ranges, each at least
+/// one pixel wide.
+fn spans(start: usize, len: usize, out: usize) -> Vec<(usize, usize)> {
+    (0..out)
+        .map(|i| {
+            let from = start + i * len / out;
+            (from, (start + (i + 1) * len / out).max(from + 1))
+        })
         .collect()
 }
 
@@ -268,6 +258,41 @@ mod tests {
             Source::parse("srt://example.com:9000"),
             Source::Input("srt://example.com:9000".into())
         );
+    }
+
+    #[test]
+    fn fit_crops_to_the_middle_and_averages() {
+        let (width, height) = (WIDTH * 2, HEIGHT * 2 + 200);
+        let img = fit(width, height, |x, y| {
+            if y < 100 || y >= height - 100 {
+                [255, 0, 0]
+            } else {
+                [0, (x % 2 * 200) as u8, 50]
+            }
+        });
+        assert_eq!((img.width, img.height), (WIDTH, HEIGHT));
+        assert!(img.rgb.chunks_exact(3).all(|p| p == [0, 100, 50]));
+    }
+
+    #[test]
+    fn fit_scales_up_small_pictures() {
+        let img = fit(32, 18, |x, _| [(x * 8) as u8, 0, 0]);
+        assert_eq!((img.width, img.height), (WIDTH, HEIGHT));
+        assert_eq!(img.rgb[0], 0);
+        assert_eq!(img.rgb[(WIDTH - 1) * 3], 31 * 8);
+    }
+
+    #[test]
+    #[ignore = "needs a camera"]
+    fn camera_produces_frames() {
+        let capture = Capture::start(Source::Camera("0".into()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while capture.latest().is_none() && capture.error().is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(capture.error(), None);
+        let (_, img) = capture.latest().expect("a frame");
+        assert_eq!((img.width, img.height), (WIDTH, HEIGHT));
     }
 
     #[test]

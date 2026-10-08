@@ -39,6 +39,8 @@ pub enum Input {
     Device(Option<String>),
     /// 48 kHz mono s16le, consumed in real time.
     Pcm(Box<dyn Read + Send>),
+    /// 440 Hz with a short 1760 Hz beep at the start of every second.
+    Tone,
 }
 
 pub enum Output {
@@ -112,6 +114,12 @@ impl Engine {
                 thread::Builder::new()
                     .name("bits-audio-pcm".into())
                     .spawn(move || encode_pcm(shared, reader, sender))?;
+            }
+            Input::Tone => {
+                let shared = shared.clone();
+                thread::Builder::new()
+                    .name("bits-audio-tone".into())
+                    .spawn(move || encode_tone(shared, sender))?;
             }
         }
         match opts.output {
@@ -438,6 +446,23 @@ fn encode_pcm(shared: Arc<Shared>, mut reader: Box<dyn Read + Send>, mut sender:
     }
 }
 
+fn encode_tone(shared: Arc<Shared>, mut sender: PacketSender) {
+    let rate = SAMPLE_RATE as u64;
+    let mut frame = [0f32; FRAME_SAMPLES];
+    let mut clock = Pacer::new();
+    let mut n = 0u64;
+    while shared.running.load(Ordering::Relaxed) {
+        for s in &mut frame {
+            let hz = if n % rate < rate / 25 { 1760.0 } else { 440.0 };
+            let t = n as f64 / rate as f64;
+            *s = (0.125 * (std::f64::consts::TAU * hz * t).sin()) as f32;
+            n += 1;
+        }
+        sender.send(&frame);
+        clock.wait();
+    }
+}
+
 fn mix_headless(shared: Arc<Shared>, mut mixer: Mixer) {
     let mut frame = [0f32; FRAME_SAMPLES];
     let mut clock = Pacer::new();
@@ -523,6 +548,25 @@ mod tests {
         assert!(engine.local_level() > 0.3);
         let seqs: Vec<u16> = packets.lock().unwrap().iter().map(|p| p.0).collect();
         assert_eq!(seqs, (0..seqs.len() as u16).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn tone_input_is_audible() {
+        let count = Arc::new(AtomicU32::new(0));
+        let sink = count.clone();
+        let engine = Engine::start(
+            Options {
+                input: Input::Tone,
+                output: Output::None,
+            },
+            move |_, _| {
+                sink.fetch_add(1, Ordering::Relaxed);
+            },
+        )
+        .unwrap();
+        thread::sleep(Duration::from_millis(300));
+        assert!(count.load(Ordering::Relaxed) >= 10);
+        assert!(engine.local_level() > 0.0);
     }
 
     #[test]

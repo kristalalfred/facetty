@@ -4,7 +4,8 @@ Terminal video calls with colored ASCII video and audio.
 
 ## Try it
 
-Requires Rust, `just`, and `ffmpeg`.
+Requires Rust and `just`. On Linux, building also needs `libasound2-dev`,
+`libclang-dev`, and `pkg-config` (Debian and Ubuntu package names).
 
 ```sh
 just servers       # terminal 1
@@ -26,12 +27,12 @@ just share
 
 Builds release binaries, starts both servers with random server and host keys,
 creates a call, and prints join commands. Guests download the client to
-`~/.bits/bin`; they need the same OS and architecture as the host, plus `ffmpeg`
-for camera capture.
+`~/.bits/bin`; they need the same OS and architecture as the host.
 `just share 8750` uses ports 8750/8751.
 
-`bits devices` lists devices and their selection flags. `--video` also accepts
-`test`, a file (looped), or a URL supported by ffmpeg.
+`bits devices` lists devices and their selection flags; `--video camera:<index>`
+also takes part of a camera's name. `--video` also accepts `test`, and with
+`ffmpeg` installed, a file (looped) or a URL.
 
 ## Call permissions
 
@@ -79,8 +80,9 @@ and Opus audio over QUIC. The ASCII encoder is a CPU port of
 
 ## Limits
 
-- Camera and microphone capture are untested. Linux and Windows camera
-  arguments are unverified.
+- Camera capture has only been run on macOS. The Linux (V4L2, YUYV only) and
+  Windows (Media Foundation) cameras build but have not been tried.
+- Microphone capture is untested.
 - An SFU restart disconnects callers; rejoin manually.
 
 [AcerolaFX_ASCII.fx]: https://github.com/GarrettGunnell/AcerolaFX/blob/main/Shaders/AcerolaFX_ASCII.fx

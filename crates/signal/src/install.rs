@@ -27,10 +27,6 @@ curl -fsSL "$server/download/bits" -o "$dir/bits.part"
 chmod +x "$dir/bits.part"
 mv "$dir/bits.part" "$dir/bits"
 
-if ! command -v ffmpeg >/dev/null 2>&1; then
-  echo "note: ffmpeg is missing, so your camera will not work (brew install ffmpeg)" >&2
-fi
-
 if [ "$#" -gt 0 ]; then
   code="$1"
   shift

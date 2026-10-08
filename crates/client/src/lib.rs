@@ -1,4 +1,5 @@
 pub mod app;
+pub mod camera;
 pub mod capture;
 pub mod chat;
 pub mod desktop;
