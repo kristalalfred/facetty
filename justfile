@@ -59,3 +59,11 @@ preview *args="":
 # Render an image as ASCII.
 ascii image cols="96" *args="":
     cargo run -q --release -p facetty-ascii --example render -- {{image}} {{cols}} {{args}}
+
+blender := env("BLENDER", "/Applications/Blender.app/Contents/MacOS/Blender")
+
+# Render the intro in Blender and bake it into the client.
+splash:
+    rm -rf target/splash
+    "{{blender}}" -b --factory-startup --python-exit-code 1 -P splash/phosphor.py -- target/splash
+    cargo run -q --release -p facetty-ascii --example bake_splash -- target/splash splash/phosphor.txt crates/client/assets/splash.reel

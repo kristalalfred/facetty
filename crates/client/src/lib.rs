@@ -7,4 +7,5 @@ pub mod layout;
 pub mod picker;
 pub mod publisher;
 pub mod session;
+pub mod splash;
 pub mod ui;

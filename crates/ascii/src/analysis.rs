@@ -1,5 +1,6 @@
 use crate::{
-    Cell, EDGE_FALLING, EDGE_HORIZONTAL, EDGE_RISING, EDGE_VERTICAL, FILL_GLYPHS, Frame, Image,
+    Cell, EDGE_FALLING, EDGE_HORIZONTAL, EDGE_RISING, EDGE_VERTICAL, FILL_GLYPHS, Frame, Geometry,
+    Image,
 };
 
 /// Defaults follow the shader's.
@@ -14,6 +15,14 @@ pub struct Params {
     /// cell's mean side length in pixels. The shader's fixed 8 of an 8x8 tile
     /// is 1.0 here.
     pub edge_threshold: f32,
+    /// Summed absolute depth difference to the 8 neighbours, in the depth's
+    /// units, above which a pixel is an edge. Only `analyze_geometry` uses it.
+    pub depth_threshold: f32,
+    /// Summed absolute normal difference over the 8 neighbours and 3 axes
+    /// above which a pixel is an edge. Only `analyze_geometry` uses it.
+    pub normal_threshold: f32,
+    /// Cells darker than this luminance (0 to 1) draw no edge glyph.
+    pub edge_min_luma: f32,
     pub exposure: f32,
     pub attenuation: f32,
     pub invert: bool,
@@ -30,6 +39,9 @@ impl Default for Params {
             tau: 1.0,
             threshold: 0.005,
             edge_threshold: 1.0,
+            depth_threshold: 0.6,
+            normal_threshold: 1.2,
+            edge_min_luma: 0.0,
             exposure: 1.0,
             attenuation: 1.0,
             invert: false,
@@ -40,6 +52,17 @@ impl Default for Params {
 }
 
 const NO_EDGE: u8 = u8::MAX;
+
+const NEIGHBOURS: [(isize, isize); 8] = [
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
 
 /// Holds the per-pixel passes for one image so it can be rendered at several
 /// grid sizes without redoing them. Buffers are reused across images.
@@ -73,6 +96,26 @@ impl Analyzer {
     }
 
     pub fn analyze(&mut self, img: &Image) {
+        self.prepare(img);
+        self.difference_of_gaussians();
+        self.integrate(img);
+    }
+
+    /// Like [`analyze`](Self::analyze), but also draws edges where depth or
+    /// surface direction jumps, as the shader does with a game's depth buffer.
+    pub fn analyze_geometry(&mut self, img: &Image, geometry: &Geometry) {
+        assert_eq!(
+            (geometry.width, geometry.height),
+            (img.width, img.height),
+            "geometry size mismatch"
+        );
+        self.prepare(img);
+        self.difference_of_gaussians();
+        self.outline_geometry(geometry);
+        self.integrate(img);
+    }
+
+    fn prepare(&mut self, img: &Image) {
         let (w, h) = (img.width, img.height);
         self.width = w;
         self.height = h;
@@ -87,8 +130,6 @@ impl Analyzer {
         for (l, px) in self.luma.iter_mut().zip(img.rgb.as_chunks::<3>().0) {
             *l = luma(px[0], px[1], px[2]) / 255.0;
         }
-        self.difference_of_gaussians();
-        self.integrate(img);
     }
 
     fn difference_of_gaussians(&mut self) {
@@ -121,6 +162,29 @@ impl Analyzer {
                     b += self.blur_b[yy * w + x] * kb[(k + r) as usize];
                 }
                 self.mask[y * w + x] = (a - p.tau * b >= p.threshold) as u8;
+            }
+        }
+    }
+
+    fn outline_geometry(&mut self, geometry: &Geometry) {
+        let (w, h) = (self.width, self.height);
+        let p = self.params;
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                let (d0, n0) = (geometry.depth[i], geometry.normal[i]);
+                let (mut depth, mut normal) = (0.0f32, 0.0f32);
+                for (dx, dy) in NEIGHBOURS {
+                    let xx = (x as isize + dx).clamp(0, w as isize - 1) as usize;
+                    let yy = (y as isize + dy).clamp(0, h as isize - 1) as usize;
+                    let j = yy * w + xx;
+                    depth += (geometry.depth[j] - d0).abs();
+                    let n = geometry.normal[j];
+                    normal += (0..3).map(|k| (n[k] - n0[k]).abs()).sum::<f32>();
+                }
+                if depth > p.depth_threshold || normal > p.normal_threshold {
+                    self.mask[i] = 1;
+                }
             }
         }
     }
@@ -193,8 +257,10 @@ impl Analyzer {
                 let sum_rgb = rect_sum(&self.sat_rgb, stride, x0, y0, x1, y1);
                 let rgb: [u8; 3] = std::array::from_fn(|i| ((sum_rgb[i] + area / 2) / area) as u8);
 
-                let glyph = self
-                    .edge_glyph(x0, y0, x1, y1)
+                let lit = luma(rgb[0], rgb[1], rgb[2]) >= p.edge_min_luma * 255.0;
+                let glyph = lit
+                    .then(|| self.edge_glyph(x0, y0, x1, y1))
+                    .flatten()
                     .or_else(|| p.fill.then(|| fill_glyph(rgb, p)))
                     .unwrap_or(0);
                 frame.cells[r * cols as usize + c] = Cell { glyph, rgb };
@@ -376,6 +442,46 @@ mod tests {
             falling.lines().collect::<Vec<_>>()
         );
         assert_eq!(glyph_count(&falling, EDGE_RISING), 0);
+    }
+
+    #[test]
+    fn depth_steps_draw_edges_where_color_is_flat() {
+        let img = image(160, 160, |_, _| 120);
+        let geometry = Geometry {
+            width: 160,
+            height: 160,
+            depth: (0..160 * 160)
+                .map(|i| if i % 160 < 80 { 2.0 } else { 9.0 })
+                .collect(),
+            normal: vec![[0.0, 0.0, 1.0]; 160 * 160],
+        };
+        let mut a = Analyzer::new(Params::default());
+        a.analyze(&img);
+        assert_eq!(glyph_count(&a.render(20, 10), EDGE_VERTICAL), 0);
+        a.analyze_geometry(&img, &geometry);
+        let f = a.render(20, 10);
+        assert!(
+            glyph_count(&f, EDGE_VERTICAL) >= 8,
+            "{:#?}",
+            f.lines().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn dark_cells_skip_edges_below_the_minimum() {
+        let img = image(160, 160, |x, _| if x < 80 { 2 } else { 12 });
+        let mut a = Analyzer::new(Params {
+            threshold: 0.0001,
+            ..Params::default()
+        });
+        a.analyze(&img);
+        assert!(glyph_count(&a.render(20, 10), EDGE_VERTICAL) > 0);
+        a.set_params(Params {
+            threshold: 0.0001,
+            edge_min_luma: 0.1,
+            ..Params::default()
+        });
+        assert_eq!(glyph_count(&a.render(20, 10), EDGE_VERTICAL), 0);
     }
 
     #[test]

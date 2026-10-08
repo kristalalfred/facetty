@@ -52,7 +52,8 @@ kristalalfred/tap` allows it.
 
 Set `FACETTY_SERVER` to leave out `--server`. On macOS, allow camera,
 microphone, and local-network access when prompted. Use headphones; there is no
-echo cancellation.
+echo cancellation. `join` opens on an intro; press Enter to join, or pass
+`--no-splash` (or set `FACETTY_NO_SPLASH=1`) to skip it.
 
 `facetty preview` checks your camera without joining a call. Press `d` in a
 call or preview to switch camera, microphone, or speaker. `facetty devices`
@@ -130,6 +131,12 @@ random host key, creates a call, and prints join commands for your network;
 video and Opus audio over QUIC; `facetty-server` runs both in one process. The
 ASCII encoder is a CPU port of [Acerola's ASCII shader][AcerolaFX_ASCII.fx]
 (MIT, see `LICENSE-AcerolaFX`).
+
+The intro is a Blender scene built by `splash/phosphor.py`. Its frames go
+through the same encoder, with the shader's depth and normal edges added from
+Blender's render passes, and are baked into `crates/client/assets/splash.reel`.
+`just splash` renders and bakes it again; it needs Blender (set `BLENDER` if it
+is not in `/Applications`) and the Arial Black font that macOS ships.
 
 ## Releasing
 

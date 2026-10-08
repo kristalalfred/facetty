@@ -37,14 +37,14 @@ pub enum DecodeError {
 }
 
 /// Cell as sent: `[glyph << 4 | blue, red << 4 | green]`.
-type Packed = [u8; 2];
+pub(crate) type Packed = [u8; 2];
 
-fn pack(cell: &Cell) -> Packed {
+pub(crate) fn pack(cell: &Cell) -> Packed {
     let [r, g, b] = cell.rgb.map(to_nibble);
     [cell.glyph << 4 | b, r << 4 | g]
 }
 
-fn unpack([hi, lo]: Packed) -> Cell {
+pub(crate) fn unpack([hi, lo]: Packed) -> Cell {
     Cell {
         glyph: (hi >> 4).min(GLYPHS.len() as u8 - 1),
         rgb: [lo >> 4, lo & 0xf, hi & 0xf].map(from_nibble),

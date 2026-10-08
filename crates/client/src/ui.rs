@@ -49,6 +49,12 @@ impl Palette {
     }
 }
 
+pub fn truecolor() -> bool {
+    std::env::var("COLORTERM")
+        .map(|v| v.contains("truecolor") || v.contains("24bit"))
+        .unwrap_or(false)
+}
+
 pub fn color(rgb: [u8; 3], truecolor: bool) -> Color {
     let [r, g, b] = rgb;
     if truecolor {

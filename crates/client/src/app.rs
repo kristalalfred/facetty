@@ -100,9 +100,7 @@ pub struct Setup {
 
 impl App {
     pub fn new(setup: Setup) -> Self {
-        let truecolor = std::env::var("COLORTERM")
-            .map(|v| v.contains("truecolor") || v.contains("24bit"))
-            .unwrap_or(false);
+        let truecolor = ui::truecolor();
         let mut me = setup.me;
         me.audio_muted |= setup.audio.is_none();
         let mut app = Self {

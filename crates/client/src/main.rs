@@ -3,6 +3,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use clap::builder::BoolishValueParser;
 use clap::{Args, Parser, Subcommand};
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
@@ -18,6 +19,7 @@ use facetty::camera;
 use facetty::capture::Source;
 use facetty::publisher::Publisher;
 use facetty::session::{self, Event};
+use facetty::splash;
 
 /// Video calls in your terminal, drawn in ASCII.
 #[derive(Parser)]
@@ -56,6 +58,9 @@ enum Cmd {
         /// Speaker name (or part of it).
         #[arg(long)]
         speaker: Option<String>,
+        /// Join without the intro animation.
+        #[arg(long, env = "FACETTY_NO_SPLASH", value_parser = BoolishValueParser::new())]
+        no_splash: bool,
     },
     /// Join headless and publish a test pattern, a file, or a stream.
     Bot {
@@ -75,6 +80,9 @@ enum Cmd {
     },
     /// List cameras and audio devices.
     Devices,
+    /// Play the intro animation.
+    #[command(hide = true)]
+    Splash,
 }
 
 #[derive(Args)]
@@ -112,10 +120,12 @@ async fn main() -> Result<()> {
             no_audio,
             mic,
             speaker,
+            no_splash,
         } => {
             log_to_file()?;
             let audio = (!no_audio).then_some((mic, speaker));
-            join(code.to_ascii_lowercase(), conn, video, !no_video, audio).await
+            let code = code.to_ascii_lowercase();
+            join(code, conn, video, !no_video, audio, !no_splash).await
         }
         Cmd::Bot {
             code,
@@ -134,6 +144,12 @@ async fn main() -> Result<()> {
             preview(video).await
         }
         Cmd::Devices => devices(),
+        Cmd::Splash => {
+            let mut terminal = ratatui::init();
+            let result = splash::play(&mut terminal, async { Ok(()) }, "").await;
+            ratatui::restore();
+            result.map(|_| ())
+        }
     }
 }
 
@@ -143,11 +159,28 @@ async fn join(
     video: VideoArgs,
     video_on: bool,
     audio: Option<(Option<String>, Option<String>)>,
+    intro: bool,
 ) -> Result<()> {
     let name = conn.name.unwrap_or_else(default_name);
-    eprintln!("joining {room} on {} as {name}...", conn.server);
     let (video_tx, video_rx) = mpsc::channel(4);
-    let session = session::connect(&conn.server, &room, &name, video_rx).await?;
+    let connect = session::connect(&conn.server, &room, &name, video_rx);
+    let mut terminal;
+    let session = if intro {
+        terminal = init_terminal();
+        let waiting = format!("joining {room} on {}...", conn.server);
+        match splash::play(&mut terminal, connect, &waiting).await {
+            Ok(Some(session)) => session,
+            quit_or_error => {
+                restore_terminal();
+                return quit_or_error.map(|_| ());
+            }
+        }
+    } else {
+        eprintln!("joining {room} on {} as {name}...", conn.server);
+        let session = connect.await?;
+        terminal = init_terminal();
+        session
+    };
     let publisher = Publisher::start(Source::parse(&video.video), video.fps, video_tx, video_on);
 
     let (engine, notice) = match &audio {
@@ -184,7 +217,8 @@ async fn join(
         commands: Some(session.commands.clone()),
         notice,
     });
-    let mut terminal = init_terminal();
+    // AI-NOTE: device setup above can print to stderr over the alternate screen.
+    let _ = terminal.clear();
     let mut session = session;
     let events = std::mem::replace(&mut session.events, mpsc::unbounded_channel().1);
     let result = app.run(&mut terminal, Some(events)).await;

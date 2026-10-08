@@ -1,0 +1,5 @@
+loop=97
+exit=145
+bloom=0.7
+bloom_threshold=0.72
+bloom_radius=24

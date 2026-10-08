@@ -9,6 +9,7 @@
 
 mod analysis;
 mod codec;
+pub mod reel;
 
 pub use analysis::{Analyzer, Params};
 pub use codec::{DecodeError, Decoder, Encoder};
@@ -38,6 +39,16 @@ impl Image {
         assert_eq!(rgb.len(), width * height * 3, "RGB buffer size mismatch");
         Self { width, height, rgb }
     }
+}
+
+/// Per-pixel scene depth and surface normals for an [`Image`], as a 3D
+/// renderer outputs them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Geometry {
+    pub width: usize,
+    pub height: usize,
+    pub depth: Vec<f32>,
+    pub normal: Vec<[f32; 3]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
