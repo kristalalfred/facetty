@@ -69,6 +69,12 @@ pub struct SfuHeartbeat {
     pub connections: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CallInvite {
+    pub code: String,
+    pub expires_unix: u64,
+}
+
 pub const MAX_NAME_LEN: usize = 32;
 pub const MAX_CHAT_LEN: usize = 500;
 pub const MAX_ROOM_LEN: usize = 64;

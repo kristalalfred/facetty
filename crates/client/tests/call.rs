@@ -12,11 +12,12 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 const SECRET: &[u8] = b"test-secret";
+const HOST_KEY: &str = "test-host-key";
 const WAIT: Duration = Duration::from_secs(10);
 
 async fn start_servers() -> String {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let signal = bits_signal::Signal::new(SECRET, None);
+    let signal = bits_signal::Signal::new(SECRET, HOST_KEY.as_bytes(), None);
     let sfu = Arc::new(bits_sfu::Sfu::bind("127.0.0.1:0".parse().unwrap(), SECRET).unwrap());
     signal.register_sfu(SfuHeartbeat {
         id: "test".into(),
@@ -67,11 +68,12 @@ impl Read for Tone {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn two_people_see_hear_chat_and_react() {
+async fn invited_callers_see_hear_chat_and_react_with_other_calls_isolated() {
     let server = start_servers().await;
+    let code = session::create_call(&server, HOST_KEY).await.unwrap().code;
 
     let (alice_video, alice_video_rx) = mpsc::channel(4);
-    let mut alice = session::connect(&server, "room", "alice", alice_video_rx)
+    let mut alice = session::connect(&server, &code, "alice", alice_video_rx)
         .await
         .unwrap();
     let alice_publisher = Publisher::start(Source::Test, 30, alice_video, true);
@@ -85,12 +87,30 @@ async fn two_people_see_hear_chat_and_react() {
     .unwrap();
 
     let (_bob_video, bob_video_rx) = mpsc::channel(4);
-    let mut bob = session::connect(&server, "room", "bob", bob_video_rx)
+    let mut bob = session::connect(&server, &code, "bob", bob_video_rx)
         .await
         .unwrap();
     assert_eq!(bob.participants.len(), 1);
     assert_eq!(bob.participants[0].name, "alice");
     let alice_id = alice.me.id;
+
+    let other_code = session::create_call(&server, HOST_KEY).await.unwrap().code;
+    assert_ne!(other_code, code);
+    let (_carol_video, carol_video_rx) = mpsc::channel(4);
+    let mut carol = session::connect(&server, &other_code, "carol", carol_video_rx)
+        .await
+        .unwrap();
+    assert!(carol.participants.is_empty());
+    let roster: Vec<bits_proto::signal::Participant> = reqwest::get(format!(
+        "{server}/rooms/{}",
+        other_code.to_ascii_uppercase()
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(roster, vec![carol.me.clone()]);
 
     let bob_name = next_matching(&mut alice, |e| match e {
         Event::Joined(p) => Some(p.name),
@@ -100,6 +120,13 @@ async fn two_people_see_hear_chat_and_react() {
     assert_eq!(bob_name, "bob");
 
     let rung = ladder::best_fit(80, 24).unwrap();
+    carol
+        .commands
+        .send(Command::Subscribe {
+            publisher: alice_id,
+            rung: Some(rung),
+        })
+        .unwrap();
     bob.commands
         .send(Command::Subscribe {
             publisher: alice_id,
@@ -165,6 +192,19 @@ async fn two_people_see_hear_chat_and_react() {
     .await;
     assert_eq!(reaction, (alice_id, "🎉".to_string()));
 
+    assert!(
+        timeout(Duration::from_millis(200), carol.events.recv())
+            .await
+            .is_err(),
+        "another call received signaling or video"
+    );
+    assert!(
+        timeout(Duration::from_millis(200), carol.connection.read_datagram())
+            .await
+            .is_err(),
+        "another call received audio"
+    );
+
     bob.commands
         .send(Command::Subscribe {
             publisher: alice_id,
@@ -186,4 +226,36 @@ async fn two_people_see_hear_chat_and_react() {
     })
     .await;
     assert_eq!(left, alice_id);
+    bob.close().await;
+    carol.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn creation_needs_a_host_key_and_joining_needs_an_existing_code() {
+    let server = start_servers().await;
+    let response = reqwest::Client::new()
+        .post(format!("{server}/rooms"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let error = session::create_call(&server, "wrong").await.unwrap_err();
+    assert!(error.to_string().contains("host key rejected"));
+    let response = reqwest::get(format!("{server}/rooms/lobby")).await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let (_video, video_rx) = mpsc::channel(4);
+    let error = match session::connect(&server, "lobby", "guest", video_rx).await {
+        Ok(_) => panic!("room names must not create calls"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("invalid or expired call code"));
+
+    let code = session::create_call(&server, HOST_KEY).await.unwrap().code;
+    let (_video, video_rx) = mpsc::channel(4);
+    let session = session::connect(&server, &code.to_ascii_uppercase(), "guest", video_rx)
+        .await
+        .unwrap();
+    assert!(session.participants.is_empty());
+    session.close().await;
 }

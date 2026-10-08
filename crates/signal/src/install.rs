@@ -1,4 +1,4 @@
-//! `curl http://<server>/install | sh -s -- <room>` hands out the client binary
+//! `curl http://<server>/install | sh -s -- <code>` hands out the client binary
 //! that sits next to this server, built for the same OS and architecture.
 
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use crate::Signal;
 
 const SCRIPT: &str = r#"#!/bin/sh
-# Installs the bits client from @SERVER@. Pass a room name to join it right away.
+# Installs the bits client from @SERVER@. Pass a call code to join it right away.
 set -eu
 server="@SERVER@"
 dir="${BITS_HOME:-$HOME/.bits}/bin"
@@ -32,12 +32,12 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
 fi
 
 if [ "$#" -gt 0 ]; then
-  room="$1"
+  code="$1"
   shift
-  exec "$dir/bits" join "$room" --server "$server" "$@" </dev/tty
+  exec "$dir/bits" join "$code" --server "$server" "$@" </dev/tty
 fi
 echo "installed $dir/bits"
-echo "join a call with: $dir/bits join <room> --server $server"
+echo "join a call with: $dir/bits join <code> --server $server"
 "#;
 
 pub(crate) async fn script(State(signal): State<Arc<Signal>>, headers: HeaderMap) -> Response {

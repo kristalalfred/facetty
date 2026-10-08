@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use bits_proto::signal::{MediaServer, SfuHeartbeat};
 use bits_sfu::Sfu;
 use clap::Parser;
@@ -20,7 +20,7 @@ struct Args {
     /// Signaling server to register with.
     #[arg(long, env = "BITS_SIGNAL_URL", default_value = "http://127.0.0.1:8740")]
     signal: String,
-    #[arg(long, env = "BITS_SECRET", default_value = bits_proto::token::DEV_SECRET, hide_default_value = true)]
+    #[arg(long, env = "BITS_SECRET", hide_env_values = true)]
     secret: String,
 }
 
@@ -33,9 +33,7 @@ async fn main() -> Result<()> {
         .init();
     let _ = rustls::crypto::ring::default_provider().install_default();
     let args = Args::parse();
-    if args.secret == bits_proto::token::DEV_SECRET {
-        warn!("BITS_SECRET is not set; using the insecure development secret");
-    }
+    ensure!(!args.secret.is_empty(), "BITS_SECRET cannot be empty");
 
     let sfu = Arc::new(Sfu::bind(args.listen, args.secret.as_bytes())?);
     let public_addr = args

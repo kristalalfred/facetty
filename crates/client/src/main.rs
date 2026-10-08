@@ -28,9 +28,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Join a call.
+    /// Create a call and print its invitation code.
+    Create {
+        #[arg(long, env = "BITS_SERVER", default_value = "http://127.0.0.1:8740")]
+        server: String,
+        /// Server host key for creating calls.
+        #[arg(long, env = "BITS_HOST_KEY", hide_env_values = true)]
+        host_key: String,
+    },
+    /// Join a call using its invitation code.
     Join {
-        room: String,
+        code: String,
         #[command(flatten)]
         conn: ConnArgs,
         #[command(flatten)]
@@ -50,7 +58,7 @@ enum Cmd {
     },
     /// Join headless and publish a test pattern, a file, or a stream.
     Bot {
-        room: String,
+        code: String,
         #[command(flatten)]
         conn: ConnArgs,
         #[command(flatten)]
@@ -90,8 +98,13 @@ struct VideoArgs {
 async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     match Cli::parse().command {
+        Cmd::Create { server, host_key } => {
+            let invite = session::create_call(&server, &host_key).await?;
+            println!("{}", invite.code);
+            Ok(())
+        }
         Cmd::Join {
-            room,
+            code,
             conn,
             video,
             no_video,
@@ -104,10 +117,10 @@ async fn main() -> Result<()> {
                 input: Input::Device(mic),
                 output: Output::Device(speaker),
             });
-            join(room, conn, video, !no_video, audio).await
+            join(code.to_ascii_lowercase(), conn, video, !no_video, audio).await
         }
         Cmd::Bot {
-            room,
+            code,
             conn,
             video,
             audio,
@@ -116,7 +129,7 @@ async fn main() -> Result<()> {
                 .with_env_filter(env_filter())
                 .with_writer(std::io::stderr)
                 .init();
-            bot(room, conn, video, audio).await
+            bot(code.to_ascii_lowercase(), conn, video, audio).await
         }
         Cmd::Preview { video } => {
             log_to_file()?;

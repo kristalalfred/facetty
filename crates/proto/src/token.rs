@@ -9,9 +9,6 @@ use sha2::Sha256;
 
 use crate::ParticipantId;
 
-/// Used when no secret is configured, so a local setup runs without config.
-pub const DEV_SECRET: &str = "bits-insecure-dev-secret";
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Claims {
     pub room: String,
@@ -51,7 +48,7 @@ pub fn verify(secret: &[u8], token: &str, now_unix: u64) -> Result<Claims, Token
         .verify_slice(&tag)
         .map_err(|_| TokenError::BadSignature)?;
     let claims: Claims = postcard::from_bytes(&body).map_err(|_| TokenError::Malformed)?;
-    if claims.expires_unix < now_unix {
+    if claims.expires_unix <= now_unix {
         return Err(TokenError::Expired);
     }
     Ok(claims)
@@ -85,6 +82,7 @@ mod tests {
     fn rejects_wrong_secret_and_expiry() {
         let t = sign(b"s3cret", &claims());
         assert_eq!(verify(b"other", &t, 0), Err(TokenError::BadSignature));
+        assert_eq!(verify(b"s3cret", &t, 1_000), Err(TokenError::Expired));
         assert_eq!(verify(b"s3cret", &t, 1_001), Err(TokenError::Expired));
         assert_eq!(verify(b"s3cret", "nope", 0), Err(TokenError::Malformed));
     }

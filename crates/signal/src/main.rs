@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use tracing::{info, warn};
 
@@ -10,8 +10,11 @@ use tracing::{info, warn};
 struct Args {
     #[arg(long, env = "BITS_SIGNAL_LISTEN", default_value = "0.0.0.0:8740")]
     listen: SocketAddr,
-    #[arg(long, env = "BITS_SECRET", default_value = bits_proto::token::DEV_SECRET, hide_default_value = true)]
+    #[arg(long, env = "BITS_SECRET", hide_env_values = true)]
     secret: String,
+    /// Key required to create calls. Generated at startup when unset.
+    #[arg(long, env = "BITS_HOST_KEY", hide_env_values = true)]
+    host_key: Option<String>,
     /// Client binary to hand out at /install. Defaults to the `bits` binary
     /// next to this one, if there is one.
     #[arg(long, env = "BITS_CLIENT_BINARY")]
@@ -26,9 +29,18 @@ async fn main() -> Result<()> {
         )
         .init();
     let args = Args::parse();
-    if args.secret == bits_proto::token::DEV_SECRET {
-        warn!("BITS_SECRET is not set; using the insecure development secret");
-    }
+    ensure!(!args.secret.is_empty(), "BITS_SECRET cannot be empty");
+    let host_key = match args.host_key {
+        Some(key) => key,
+        None => {
+            let mut bytes = [0u8; 32];
+            getrandom::fill(&mut bytes).context("generating host key")?;
+            let key: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            eprintln!("host key for creating calls: {key}");
+            key
+        }
+    };
+    ensure!(!host_key.is_empty(), "BITS_HOST_KEY cannot be empty");
     let client_binary = args
         .client_binary
         .or_else(sibling_client)
@@ -39,6 +51,7 @@ async fn main() -> Result<()> {
     }
     let app = bits_signal::router(bits_signal::Signal::new(
         args.secret.as_bytes(),
+        host_key.as_bytes(),
         client_binary,
     ));
     let listener = tokio::net::TcpListener::bind(args.listen)

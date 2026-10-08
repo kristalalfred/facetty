@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 use bits_ascii::Frame;
 use bits_proto::ladder::Rung;
 use bits_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
-use bits_proto::signal::{ClientEvent, MediaServer, Participant, ServerEvent};
+use bits_proto::signal::{CallInvite, ClientEvent, MediaServer, Participant, ServerEvent};
 use bits_proto::{ALPN, ParticipantId};
 use futures_util::{SinkExt, StreamExt};
 use quinn::crypto::rustls::QuicClientConfig;
@@ -92,16 +92,50 @@ pub fn ws_url(server: &str, room: &str, name: &str) -> Result<url::Url> {
     Ok(url)
 }
 
+pub async fn create_call(server: &str, host_key: &str) -> Result<CallInvite> {
+    let mut url = url::Url::parse(server).with_context(|| format!("bad server URL {server}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("creating a call requires an http:// or https:// server URL");
+    }
+    if host_key.is_empty() {
+        bail!("host key cannot be empty");
+    }
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("server URL cannot have a path"))?
+        .pop_if_empty()
+        .push("rooms");
+    let response = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(10))
+        .build()?
+        .post(url)
+        .bearer_auth(host_key)
+        .send()
+        .await
+        .context("creating a call")?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+        bail!("host key rejected; check BITS_HOST_KEY or --host-key");
+    }
+    Ok(response.error_for_status()?.json().await?)
+}
+
 pub async fn connect(
     server: &str,
     room: &str,
     name: &str,
     video_out: mpsc::Receiver<EncodedFrame>,
 ) -> Result<Session> {
-    let url = ws_url(server, room, name)?;
+    let url = ws_url(server, &room.to_ascii_lowercase(), name)?;
     let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str())
         .await
-        .with_context(|| format!("connecting to {url}"))?;
+        .map_err(|e| match &e {
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if response.status().as_u16() == 404 =>
+            {
+                anyhow::anyhow!("invalid or expired call code")
+            }
+            _ => anyhow::Error::new(e).context("connecting to signaling server"),
+        })?;
 
     let welcome = loop {
         match ws.next().await {
