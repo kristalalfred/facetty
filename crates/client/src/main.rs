@@ -3,25 +3,25 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
-use bits_audio::{Engine, Input, Options, Output};
-use bits_proto::signal::Participant;
 use clap::{Args, Parser, Subcommand};
 use crossterm::event::{
     DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
 };
+use facetty_audio::{Engine, Input, Options, Output};
+use facetty_proto::signal::Participant;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use bits::app::{App, Setup};
-use bits::camera;
-use bits::capture::Source;
-use bits::publisher::Publisher;
-use bits::session::{self, Event};
+use facetty::app::{App, Setup};
+use facetty::camera;
+use facetty::capture::Source;
+use facetty::publisher::Publisher;
+use facetty::session::{self, Event};
 
 /// Video calls in your terminal, drawn in ASCII.
 #[derive(Parser)]
-#[command(name = "bits", version)]
+#[command(name = "facetty", version)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -31,10 +31,10 @@ struct Cli {
 enum Cmd {
     /// Create a call and print its invitation code.
     Create {
-        #[arg(long, env = "BITS_SERVER", default_value = "http://127.0.0.1:8740")]
+        #[arg(long, env = "FACETTY_SERVER", default_value = "http://127.0.0.1:8740")]
         server: String,
         /// Server host key for creating calls.
-        #[arg(long, env = "BITS_HOST_KEY", hide_env_values = true)]
+        #[arg(long, env = "FACETTY_HOST_KEY", hide_env_values = true)]
         host_key: String,
     },
     /// Join a call using its invitation code.
@@ -80,9 +80,9 @@ enum Cmd {
 #[derive(Args)]
 struct ConnArgs {
     /// Signaling server URL.
-    #[arg(long, env = "BITS_SERVER", default_value = "http://127.0.0.1:8740")]
+    #[arg(long, env = "FACETTY_SERVER", default_value = "http://127.0.0.1:8740")]
     server: String,
-    #[arg(long, env = "BITS_NAME")]
+    #[arg(long, env = "FACETTY_NAME")]
     name: Option<String>,
 }
 
@@ -330,7 +330,7 @@ fn devices() -> Result<()> {
     for (i, name) in cameras.iter().enumerate() {
         println!("  [{i}] {name}");
     }
-    let (inputs, outputs) = bits_audio::list_devices()?;
+    let (inputs, outputs) = facetty_audio::list_devices()?;
     println!("microphones (use --mic <name>):");
     for d in inputs {
         println!("  {d}");
@@ -353,7 +353,7 @@ fn env_filter() -> tracing_subscriber::EnvFilter {
 }
 
 fn log_to_file() -> Result<()> {
-    let path = std::env::temp_dir().join("bits.log");
+    let path = std::env::temp_dir().join("facetty.log");
     let file = std::fs::File::create(&path)
         .with_context(|| format!("creating log file {}", path.display()))?;
     tracing_subscriber::fmt()

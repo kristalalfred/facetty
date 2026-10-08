@@ -4,7 +4,7 @@
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Result, anyhow};
-use bits_ascii::Image;
+use facetty_ascii::Image;
 
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
@@ -56,7 +56,7 @@ fn pick(names: &[String], device: &str) -> Result<usize> {
     };
     found.ok_or_else(|| match names.len() {
         0 => anyhow!("no camera found"),
-        _ => anyhow!("no camera matches \"{device}\" (`bits devices` lists them)"),
+        _ => anyhow!("no camera matches \"{device}\" (`facetty devices` lists them)"),
     })
 }
 

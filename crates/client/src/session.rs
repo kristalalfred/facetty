@@ -6,11 +6,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use bits_ascii::Frame;
-use bits_proto::ladder::Rung;
-use bits_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
-use bits_proto::signal::{CallInvite, ClientEvent, MediaServer, Participant, ServerEvent};
-use bits_proto::{ALPN, ParticipantId};
+use facetty_ascii::Frame;
+use facetty_proto::ladder::Rung;
+use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
+use facetty_proto::signal::{CallInvite, ClientEvent, MediaServer, Participant, ServerEvent};
+use facetty_proto::{ALPN, ParticipantId};
 use futures_util::{SinkExt, StreamExt};
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -114,7 +114,7 @@ pub async fn create_call(server: &str, host_key: &str) -> Result<CallInvite> {
         .await
         .context("creating a call")?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        bail!("host key rejected; check BITS_HOST_KEY or --host-key");
+        bail!("host key rejected; check FACETTY_HOST_KEY or --host-key");
     }
     Ok(response.error_for_status()?.json().await?)
 }
@@ -280,7 +280,7 @@ pub async fn connect(
 }
 
 /// Feeds incoming audio datagrams to the engine until the connection ends.
-pub async fn receive_audio(connection: quinn::Connection, audio: Arc<bits_audio::Engine>) {
+pub async fn receive_audio(connection: quinn::Connection, audio: Arc<facetty_audio::Engine>) {
     while let Ok(datagram) = connection.read_datagram().await {
         if let Ok(packet) = media::decode::<AudioPacket>(&datagram) {
             audio.receive(packet.publisher, packet.seq, &packet.payload);
@@ -309,7 +309,7 @@ async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSen
             let Ok(msg) = media::decode::<VideoFrame>(&bytes) else {
                 return;
             };
-            match bits_ascii::decode(&msg.payload) {
+            match facetty_ascii::decode(&msg.payload) {
                 Ok(frame) => {
                     let _ = events.send(Event::Video {
                         publisher: msg.publisher,
@@ -381,7 +381,7 @@ async fn connect_media(server: &MediaServer) -> Result<(quinn::Endpoint, quinn::
     let mut endpoint = quinn::Endpoint::client(bind)?;
     endpoint.set_default_client_config(config);
     let connection = endpoint
-        .connect(addr, "bits-sfu")?
+        .connect(addr, "facetty-sfu")?
         .await
         .with_context(|| format!("connecting to media server {addr}"))?;
     Ok((endpoint, connection))

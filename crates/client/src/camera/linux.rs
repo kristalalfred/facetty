@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
-use bits_ascii::Image;
+use facetty_ascii::Image;
 use v4l::buffer::Type;
 use v4l::capability::Flags;
 use v4l::io::mmap::Stream;

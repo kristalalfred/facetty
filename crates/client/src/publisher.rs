@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use bits_ascii::{Analyzer, Frame, Params};
-use bits_proto::ladder::{self, Rung};
+use facetty_ascii::{Analyzer, Frame, Params};
+use facetty_proto::ladder::{self, Rung};
 use tokio::sync::{mpsc, watch};
 
 use crate::capture::{Capture, Source};
@@ -136,7 +136,7 @@ fn run(
                 continue;
             };
             seq = seq.wrapping_add(1);
-            let payload = bits_ascii::encode(&analyzer.render(size.cols, size.rows));
+            let payload = facetty_ascii::encode(&analyzer.render(size.cols, size.rows));
             let _ = out.try_send(EncodedFrame { rung, seq, payload });
         }
 

@@ -1,10 +1,10 @@
 use std::net::SocketAddr;
 
 use anyhow::{Context, Result, bail, ensure};
-use bits_proto::signal::MediaServer;
-use bits_sfu::Sfu;
-use bits_signal::Signal;
 use clap::Parser;
+use facetty_proto::signal::MediaServer;
+use facetty_sfu::Sfu;
+use facetty_signal::Signal;
 use tracing::info;
 
 /// Call server: call codes, rosters and chat over HTTP, video and audio over QUIC.
@@ -12,17 +12,17 @@ use tracing::info;
 #[command(version)]
 struct Args {
     /// TCP address for HTTP and WebSocket.
-    #[arg(long, env = "BITS_LISTEN", default_value = "0.0.0.0:8740")]
+    #[arg(long, env = "FACETTY_LISTEN", default_value = "0.0.0.0:8740")]
     listen: SocketAddr,
     /// UDP address for media.
-    #[arg(long, env = "BITS_MEDIA_LISTEN", default_value = "0.0.0.0:8741")]
+    #[arg(long, env = "FACETTY_MEDIA_LISTEN", default_value = "0.0.0.0:8741")]
     media_listen: SocketAddr,
     /// Media address clients should dial, as `host:port`. Defaults to the
     /// media port on whichever host clients used to reach this server.
-    #[arg(long, env = "BITS_MEDIA_ADDR")]
+    #[arg(long, env = "FACETTY_MEDIA_ADDR")]
     media_addr: Option<String>,
     /// Key required to create calls. Generated at startup when unset.
-    #[arg(long, env = "BITS_HOST_KEY", hide_env_values = true)]
+    #[arg(long, env = "FACETTY_HOST_KEY", hide_env_values = true)]
     host_key: Option<String>,
 }
 
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
             key
         }
     };
-    ensure!(!host_key.is_empty(), "BITS_HOST_KEY cannot be empty");
+    ensure!(!host_key.is_empty(), "FACETTY_HOST_KEY cannot be empty");
     let secret = random_hex()?;
 
     let sfu = Sfu::bind(args.media_listen, secret.as_bytes())?;
@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
 
     tokio::select! {
         () = sfu.run() => bail!("media endpoint closed"),
-        served = axum::serve(listener, bits_signal::router(signal)) => served.context("serving HTTP"),
+        served = axum::serve(listener, facetty_signal::router(signal)) => served.context("serving HTTP"),
         stop = shutdown() => stop.context("waiting for a shutdown signal"),
     }
 }

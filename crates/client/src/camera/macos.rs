@@ -3,9 +3,9 @@ use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use bits_ascii::Image;
 use block2::RcBlock;
 use dispatch2::DispatchQueue;
+use facetty_ascii::Image;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{AnyThread, DefinedClass, define_class, msg_send};
@@ -51,7 +51,7 @@ pub fn run(device: &str, stop: &AtomicBool, mut on_frame: impl FnMut(Image)) -> 
     let session = unsafe { AVCaptureSession::new() };
     let (frames, received) = mpsc::sync_channel(1);
     let delegate = Delegate::new(frames);
-    let queue = DispatchQueue::new("bits.camera", None);
+    let queue = DispatchQueue::new("facetty.camera", None);
     let output = unsafe { AVCaptureVideoDataOutput::new() };
     let format_key: &NSString = unsafe { kCVPixelBufferPixelFormatTypeKey }.as_ref();
     let bgra = NSNumber::numberWithUnsignedInt(kCVPixelFormatType_32BGRA);
@@ -130,7 +130,7 @@ struct Ivars {
 
 define_class!(
     #[unsafe(super(NSObject))]
-    #[name = "BitsCameraDelegate"]
+    #[name = "FacettyCameraDelegate"]
     #[ivars = Ivars]
     struct Delegate;
 

@@ -1,14 +1,14 @@
 [package]
-name = "bits"
+name = "facetty"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-bits-ascii = { version = "0.1.0", path = "../ascii" }
-bits-audio = { version = "0.1.0", path = "../audio" }
-bits-proto = { version = "0.1.0", path = "../proto" }
+facetty-ascii = { version = "0.1.0", path = "../ascii" }
+facetty-audio = { version = "0.1.0", path = "../audio" }
+facetty-proto = { version = "0.1.0", path = "../proto" }
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 crossterm = { version = "0.29.0", features = ["event-stream", "use-dev-tty"] }
@@ -29,8 +29,8 @@ url = "2.5.8"
 
 [dev-dependencies]
 axum = "0.8.9"
-bits-sfu = { path = "../sfu" }
-bits-signal = { path = "../signal" }
+facetty-sfu = { path = "../sfu" }
+facetty-signal = { path = "../signal" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

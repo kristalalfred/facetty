@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use bits_ascii::{Analyzer, Image, Params};
+use facetty_ascii::{Analyzer, Image, Params};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -36,7 +36,7 @@ fn main() {
     let t = Instant::now();
     let frame = analyzer.render(cols, rows);
     let render = t.elapsed();
-    let encoded = bits_ascii::encode(&frame);
+    let encoded = facetty_ascii::encode(&frame);
 
     for (r, line) in frame.lines().enumerate() {
         if color {

@@ -1,12 +1,12 @@
 [package]
-name = "bits-sfu"
+name = "facetty-sfu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-bits-proto = { version = "0.1.0", path = "../proto" }
+facetty-proto = { version = "0.1.0", path = "../proto" }
 bytes = "1.12.1"
 hex = "0.4.3"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }

@@ -16,7 +16,7 @@ pub struct Identity {
 
 impl Identity {
     pub fn generate() -> Result<Self> {
-        let certified = rcgen::generate_simple_self_signed(vec!["bits-sfu".to_string()])?;
+        let certified = rcgen::generate_simple_self_signed(vec!["facetty-sfu".to_string()])?;
         let cert = certified.cert.der().clone();
         let key = PrivatePkcs8KeyDer::from(certified.signing_key.serialize_der());
         let sha256_hex = hex::encode(Sha256::digest(&cert));
@@ -38,7 +38,7 @@ pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
         vec![identity.cert.clone()],
         PrivateKeyDer::Pkcs8(identity.key.clone_key()),
     )?;
-    tls.alpn_protocols = vec![bits_proto::ALPN.to_vec()];
+    tls.alpn_protocols = vec![facetty_proto::ALPN.to_vec()];
 
     let mut config = quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(tls)?));
     let transport =

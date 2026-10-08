@@ -312,124 +312,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
-name = "bits"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "bits-ascii",
- "bits-audio",
- "bits-proto",
- "bits-sfu",
- "bits-signal",
- "block2",
- "bytes",
- "clap",
- "crossterm",
- "dispatch2",
- "futures-util",
- "hex",
- "objc2",
- "objc2-av-foundation",
- "objc2-core-media",
- "objc2-core-video",
- "objc2-foundation",
- "quinn",
- "ratatui",
- "reqwest",
- "rustls",
- "serde_json",
- "sha2 0.11.0",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
- "url",
- "v4l",
- "windows",
-]
-
-[[package]]
-name = "bits-ascii"
-version = "0.1.0"
-dependencies = [
- "image",
- "thiserror 2.0.21",
- "zstd",
-]
-
-[[package]]
-name = "bits-audio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "tracing",
- "unsafe-libopus",
-]
-
-[[package]]
-name = "bits-proto"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "hmac",
- "postcard",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.21",
- "tokio",
-]
-
-[[package]]
-name = "bits-server"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "bits-proto",
- "bits-sfu",
- "bits-signal",
- "clap",
- "getrandom 0.4.3",
- "rustls",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "bits-sfu"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bits-proto",
- "bytes",
- "hex",
- "quinn",
- "rcgen",
- "rustls",
- "sha2 0.11.0",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "bits-signal"
-version = "0.1.0"
-dependencies = [
- "axum",
- "bits-proto",
- "getrandom 0.4.3",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1005,6 +887,124 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "facetty"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "block2",
+ "bytes",
+ "clap",
+ "crossterm",
+ "dispatch2",
+ "facetty-ascii",
+ "facetty-audio",
+ "facetty-proto",
+ "facetty-sfu",
+ "facetty-signal",
+ "futures-util",
+ "hex",
+ "objc2",
+ "objc2-av-foundation",
+ "objc2-core-media",
+ "objc2-core-video",
+ "objc2-foundation",
+ "quinn",
+ "ratatui",
+ "reqwest",
+ "rustls",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "url",
+ "v4l",
+ "windows",
+]
+
+[[package]]
+name = "facetty-ascii"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "thiserror 2.0.21",
+ "zstd",
+]
+
+[[package]]
+name = "facetty-audio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+ "tracing",
+ "unsafe-libopus",
+]
+
+[[package]]
+name = "facetty-proto"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hmac",
+ "postcard",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "facetty-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "facetty-proto",
+ "facetty-sfu",
+ "facetty-signal",
+ "getrandom 0.4.3",
+ "rustls",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "facetty-sfu"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "facetty-proto",
+ "hex",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "sha2 0.11.0",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "facetty-signal"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "facetty-proto",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

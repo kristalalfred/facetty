@@ -1,4 +1,4 @@
-# bits
+# facetty
 
 Terminal video calls with colored ASCII video and audio.
 
@@ -26,18 +26,18 @@ just share
 ```
 
 Builds release binaries, starts the server with a random host key, creates a
-call, and prints join commands. Guests need the `bits` client.
+call, and prints join commands. Guests need the `facetty` client.
 `just share 8750` uses ports 8750/8751.
 
-`bits devices` lists devices and their selection flags; `--video camera:<index>`
+`facetty devices` lists devices and their selection flags; `--video camera:<index>`
 also takes part of a camera's name. `--video` also accepts `test`, and with
 `ffmpeg` installed, a file (looped) or a URL.
 
 ## Call permissions
 
-`bits create --host-key <host-key> --server <url>` prints a random call code.
-Share it with guests, who run `bits join <code> --server <url>`. The host key
-can also come from `BITS_HOST_KEY`.
+`facetty create --host-key <host-key> --server <url>` prints a random call code.
+Share it with guests, who run `facetty join <code> --server <url>`. The host key
+can also come from `FACETTY_HOST_KEY`.
 
 Create more calls with the same host key and server URL. Each code admits guests
 only to its own call; room names cannot create or join calls. Chat, participant
@@ -50,18 +50,18 @@ key private.
 
 ## Hosting
 
-`bits-server` serves call codes, rosters and chat over HTTP and WebSocket, and
-forwards video and audio over QUIC. Set `BITS_HOST_KEY`, for example from
+`facetty-server` serves call codes, rosters and chat over HTTP and WebSocket, and
+forwards video and audio over QUIC. Set `FACETTY_HOST_KEY`, for example from
 `openssl rand -hex 32`, to keep the host key across restarts; otherwise the
 server generates and prints a new key at startup.
 
 | Setting | Environment variable | Default |
 |---|---|---|
-| HTTP listener | `BITS_LISTEN` | `0.0.0.0:8740` (TCP) |
-| Media listener | `BITS_MEDIA_LISTEN` | `0.0.0.0:8741` (UDP) |
-| Media address for clients | `BITS_MEDIA_ADDR` | Server host with the media listener's port |
-| Key for creating calls | `BITS_HOST_KEY` | Generated at startup |
-| Client's server URL | `BITS_SERVER` | `http://127.0.0.1:8740` |
+| HTTP listener | `FACETTY_LISTEN` | `0.0.0.0:8740` (TCP) |
+| Media listener | `FACETTY_MEDIA_LISTEN` | `0.0.0.0:8741` (UDP) |
+| Media address for clients | `FACETTY_MEDIA_ADDR` | Server host with the media listener's port |
+| Key for creating calls | `FACETTY_HOST_KEY` | Generated at startup |
+| Client's server URL | `FACETTY_SERVER` | `http://127.0.0.1:8740` |
 
 Outside a trusted LAN, put the HTTP listener behind a TLS proxy and use an
 `https://` client URL to protect host keys and call codes. Media uses QUIC over
@@ -71,8 +71,8 @@ UDP.
 
 `just build`, `just test`, and `just lint` build and check the workspace.
 
-`bits-signal` manages rooms and chat over WebSocket; `bits-sfu` forwards video
-and Opus audio over QUIC; `bits-server` runs both in one process. The ASCII encoder is a CPU port of
+`facetty-signal` manages rooms and chat over WebSocket; `facetty-sfu` forwards video
+and Opus audio over QUIC; `facetty-server` runs both in one process. The ASCII encoder is a CPU port of
 [Acerola's ASCII shader][AcerolaFX_ASCII.fx].
 
 ## Limits

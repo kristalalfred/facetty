@@ -6,9 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use bits_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
-use bits_proto::token;
 use bytes::Bytes;
+use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
+use facetty_proto::token;
 use quinn::{Connection, Endpoint};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};

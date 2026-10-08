@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use bits_ascii::Image;
+use facetty_ascii::Image;
 
 use crate::camera;
 

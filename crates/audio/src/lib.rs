@@ -106,19 +106,19 @@ impl Engine {
                 slots.push(Slot::new(Role::Mic(capture.clone()), name));
                 let shared = shared.clone();
                 thread::Builder::new()
-                    .name("bits-audio-encode".into())
+                    .name("facetty-audio-encode".into())
                     .spawn(move || encode_capture(shared, capture, sender))?;
             }
             Input::Pcm(reader) => {
                 let shared = shared.clone();
                 thread::Builder::new()
-                    .name("bits-audio-pcm".into())
+                    .name("facetty-audio-pcm".into())
                     .spawn(move || encode_pcm(shared, reader, sender))?;
             }
             Input::Tone => {
                 let shared = shared.clone();
                 thread::Builder::new()
-                    .name("bits-audio-tone".into())
+                    .name("facetty-audio-tone".into())
                     .spawn(move || encode_tone(shared, sender))?;
             }
         }
@@ -128,7 +128,7 @@ impl Engine {
                 let mixer = Mixer::new(shared.clone());
                 let shared = shared.clone();
                 thread::Builder::new()
-                    .name("bits-audio-mix".into())
+                    .name("facetty-audio-mix".into())
                     .spawn(move || mix_headless(shared, mixer))?;
             }
         }
@@ -305,7 +305,7 @@ impl DeviceThread {
         let (signals, signals_rx) = mpsc::channel();
         let signals_for_streams = signals.clone();
         let handle = thread::Builder::new()
-            .name("bits-audio-device".into())
+            .name("facetty-audio-device".into())
             .spawn(move || run_devices(shared, slots, signals_for_streams, signals_rx, ready_tx))?;
         ready_rx
             .recv()

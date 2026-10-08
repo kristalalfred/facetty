@@ -1,5 +1,5 @@
 [package]
-name = "bits-ascii"
+name = "facetty-ascii"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

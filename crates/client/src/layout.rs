@@ -1,4 +1,4 @@
-use bits_proto::ladder;
+use facetty_proto::ladder;
 use ratatui::layout::Rect;
 
 /// Largest 16:9 grid of cells (32:9 cols:rows) that fits.

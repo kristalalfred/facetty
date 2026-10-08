@@ -1,4 +1,4 @@
-use bits_ascii::Frame;
+use facetty_ascii::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};

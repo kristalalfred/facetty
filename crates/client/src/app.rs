@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use bits_ascii::Frame;
-use bits_proto::ParticipantId;
-use bits_proto::ladder::{self, Rung};
-use bits_proto::signal::{self, Participant};
 use crossterm::event::{
     Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
 };
+use facetty_ascii::Frame;
+use facetty_proto::ParticipantId;
+use facetty_proto::ladder::{self, Rung};
+use facetty_proto::signal::{self, Participant};
 use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use ratatui::layout::Rect;
@@ -60,7 +60,7 @@ pub struct App {
     truecolor: bool,
     flash: Option<(String, Instant)>,
     publisher: Publisher,
-    audio: Option<Arc<bits_audio::Engine>>,
+    audio: Option<Arc<facetty_audio::Engine>>,
     commands: Option<mpsc::UnboundedSender<Command>>,
     mirror_self: bool,
     closed: Option<String>,
@@ -72,7 +72,7 @@ pub struct Setup {
     pub me: Participant,
     pub others: Vec<Participant>,
     pub publisher: Publisher,
-    pub audio: Option<Arc<bits_audio::Engine>>,
+    pub audio: Option<Arc<facetty_audio::Engine>>,
     pub commands: Option<mpsc::UnboundedSender<Command>>,
     pub notice: Option<String>,
     pub mirror_self: bool,

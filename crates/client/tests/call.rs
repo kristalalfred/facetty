@@ -2,12 +2,12 @@ use std::io::Read;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bits::capture::Source;
-use bits::publisher::Publisher;
-use bits::session::{self, Command, Event, Session};
-use bits_audio::{Engine, Input, Options, Output};
-use bits_proto::ladder;
-use bits_proto::signal::MediaServer;
+use facetty::capture::Source;
+use facetty::publisher::Publisher;
+use facetty::session::{self, Command, Event, Session};
+use facetty_audio::{Engine, Input, Options, Output};
+use facetty_proto::ladder;
+use facetty_proto::signal::MediaServer;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -17,8 +17,8 @@ const WAIT: Duration = Duration::from_secs(10);
 
 async fn start_servers() -> String {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let sfu = Arc::new(bits_sfu::Sfu::bind("127.0.0.1:0".parse().unwrap(), SECRET).unwrap());
-    let signal = bits_signal::Signal::new(
+    let sfu = Arc::new(facetty_sfu::Sfu::bind("127.0.0.1:0".parse().unwrap(), SECRET).unwrap());
+    let signal = facetty_signal::Signal::new(
         SECRET,
         HOST_KEY.as_bytes(),
         MediaServer {
@@ -31,7 +31,7 @@ async fn start_servers() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
-        axum::serve(listener, bits_signal::router(signal))
+        axum::serve(listener, facetty_signal::router(signal))
             .await
             .unwrap();
     });
@@ -100,7 +100,7 @@ async fn invited_callers_see_hear_chat_and_react_with_other_calls_isolated() {
         .await
         .unwrap();
     assert!(carol.participants.is_empty());
-    let roster: Vec<bits_proto::signal::Participant> = reqwest::get(format!(
+    let roster: Vec<facetty_proto::signal::Participant> = reqwest::get(format!(
         "{server}/rooms/{}",
         other_code.to_ascii_uppercase()
     ))

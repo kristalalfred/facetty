@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use bits_proto::ParticipantId;
-use bits_proto::ladder::Rung;
-use bits_proto::media::ServerControl;
 use bytes::Bytes;
+use facetty_proto::ParticipantId;
+use facetty_proto::ladder::Rung;
+use facetty_proto::media::ServerControl;
 use quinn::Connection;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
