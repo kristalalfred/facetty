@@ -164,6 +164,7 @@ async fn join(
     let name = conn.name.unwrap_or_else(default_name);
     let outbox = Outbox::default();
     let connect = session::connect(&conn.server, &room, &name, outbox.clone());
+    let publisher = Publisher::start(Source::parse(&video.video), video.fps, outbox, video_on);
     let mut terminal;
     let session = if intro {
         terminal = init_terminal();
@@ -181,7 +182,6 @@ async fn join(
         terminal = init_terminal();
         session
     };
-    let publisher = Publisher::start(Source::parse(&video.video), video.fps, outbox, video_on);
 
     let (engine, notice) = match &audio {
         None => (None, None),
