@@ -7,7 +7,7 @@ use bits::publisher::Publisher;
 use bits::session::{self, Command, Event, Session};
 use bits_audio::{Engine, Input, Options, Output};
 use bits_proto::ladder;
-use bits_proto::signal::{MediaServer, SfuHeartbeat};
+use bits_proto::signal::MediaServer;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 
@@ -17,16 +17,15 @@ const WAIT: Duration = Duration::from_secs(10);
 
 async fn start_servers() -> String {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let signal = bits_signal::Signal::new(SECRET, HOST_KEY.as_bytes(), None);
     let sfu = Arc::new(bits_sfu::Sfu::bind("127.0.0.1:0".parse().unwrap(), SECRET).unwrap());
-    signal.register_sfu(SfuHeartbeat {
-        id: "test".into(),
-        media: MediaServer {
+    let signal = bits_signal::Signal::new(
+        SECRET,
+        HOST_KEY.as_bytes(),
+        MediaServer {
             addr: format!(":{}", sfu.local_addr().unwrap().port()),
             cert_sha256: sfu.cert_sha256().to_string(),
         },
-        connections: 0,
-    });
+    );
     tokio::spawn(async move { sfu.run().await });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

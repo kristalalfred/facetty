@@ -63,13 +63,6 @@ pub enum ClientEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SfuHeartbeat {
-    pub id: String,
-    pub media: MediaServer,
-    pub connections: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CallInvite {
     pub code: String,
     pub expires_unix: u64,

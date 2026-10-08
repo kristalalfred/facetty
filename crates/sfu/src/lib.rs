@@ -47,10 +47,6 @@ impl Sfu {
         &self.identity.sha256_hex
     }
 
-    pub fn connections(&self) -> u32 {
-        self.rooms.connections()
-    }
-
     pub fn rooms(&self) -> Arc<Rooms> {
         self.rooms.clone()
     }

@@ -86,10 +86,6 @@ impl Rooms {
         }
     }
 
-    pub fn connections(&self) -> u32 {
-        self.lock().values().map(|r| r.members.len() as u32).sum()
-    }
-
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Room>> {
         self.rooms.lock().unwrap_or_else(|e| e.into_inner())
     }

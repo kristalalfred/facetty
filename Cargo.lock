@@ -384,38 +384,49 @@ dependencies = [
 ]
 
 [[package]]
-name = "bits-sfu"
+name = "bits-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "bits-proto",
- "bytes",
+ "bits-sfu",
+ "bits-signal",
  "clap",
- "hex",
- "quinn",
- "rcgen",
- "reqwest",
+ "getrandom 0.4.3",
  "rustls",
- "sha2 0.11.0",
  "tokio",
  "tracing",
  "tracing-subscriber",
 ]
 
 [[package]]
-name = "bits-signal"
+name = "bits-sfu"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bits-proto",
+ "bytes",
+ "hex",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "sha2 0.11.0",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "bits-signal"
+version = "0.1.0"
+dependencies = [
  "axum",
  "bits-proto",
- "clap",
  "getrandom 0.4.3",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
