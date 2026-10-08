@@ -421,11 +421,11 @@ fn encode_capture(shared: Arc<Shared>, capture: Arc<Capture>, mut sender: Packet
             }
             pending.extend(samples.drain(..));
         }
-        let mut frames = pending.chunks_exact(FRAME_SAMPLES);
-        for frame in &mut frames {
-            sender.send(frame.try_into().unwrap());
+        let (frames, rest) = pending.as_chunks::<FRAME_SAMPLES>();
+        for frame in frames {
+            sender.send(frame);
         }
-        let used = pending.len() - frames.remainder().len();
+        let used = pending.len() - rest.len();
         pending.drain(..used);
     }
 }
@@ -438,8 +438,8 @@ fn encode_pcm(shared: Arc<Shared>, mut reader: Box<dyn Read + Send>, mut sender:
         if reader.read_exact(&mut bytes).is_err() {
             break;
         }
-        for (s, b) in frame.iter_mut().zip(bytes.chunks_exact(2)) {
-            *s = i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0;
+        for (s, b) in frame.iter_mut().zip(bytes.as_chunks::<2>().0) {
+            *s = i16::from_le_bytes(*b) as f32 / 32_768.0;
         }
         sender.send(&frame);
         clock.wait();

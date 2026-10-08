@@ -271,7 +271,8 @@ mod tests {
             }
         });
         assert_eq!((img.width, img.height), (WIDTH, HEIGHT));
-        assert!(img.rgb.chunks_exact(3).all(|p| p == [0, 100, 50]));
+        let (pixels, _) = img.rgb.as_chunks::<3>();
+        assert!(pixels.iter().all(|p| *p == [0, 100, 50]));
     }
 
     #[test]

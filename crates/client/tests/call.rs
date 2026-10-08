@@ -57,10 +57,10 @@ struct Tone(u64);
 
 impl Read for Tone {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        for chunk in buf.chunks_exact_mut(2) {
+        for chunk in buf.as_chunks_mut::<2>().0 {
             let t = self.0 as f32 / 48_000.0;
             let v = ((t * 440.0 * std::f32::consts::TAU).sin() * 8000.0) as i16;
-            chunk.copy_from_slice(&v.to_le_bytes());
+            *chunk = v.to_le_bytes();
             self.0 += 1;
         }
         Ok(buf.len() / 2 * 2)

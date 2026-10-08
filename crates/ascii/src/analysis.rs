@@ -84,7 +84,7 @@ impl Analyzer {
         self.sat_rgb.resize((w + 1) * (h + 1), [0; 3]);
         self.sat_dir.resize((w + 1) * (h + 1), [0; 4]);
 
-        for (l, px) in self.luma.iter_mut().zip(img.rgb.chunks_exact(3)) {
+        for (l, px) in self.luma.iter_mut().zip(img.rgb.as_chunks::<3>().0) {
             *l = luma(px[0], px[1], px[2]) / 255.0;
         }
         self.difference_of_gaussians();
