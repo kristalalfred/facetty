@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -305,7 +305,18 @@ pub async fn receive_audio(connection: quinn::Connection, audio: Arc<facetty_aud
 }
 
 pub fn audio_sender(connection: quinn::Connection) -> impl FnMut(u16, Vec<u8>) + Send + 'static {
+    late_audio_sender(Arc::new(OnceLock::from(connection)))
+}
+
+/// For audio that starts before the call is joined: drops packets until
+/// `link` holds the connection.
+pub fn late_audio_sender(
+    link: Arc<OnceLock<quinn::Connection>>,
+) -> impl FnMut(u16, Vec<u8>) + Send + 'static {
     move |seq, payload| {
+        let Some(connection) = link.get() else {
+            return;
+        };
         let packet = AudioPacket {
             publisher: 0,
             seq,

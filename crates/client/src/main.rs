@@ -1,6 +1,6 @@
 use std::io;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use clap::builder::BoolishValueParser;
@@ -163,14 +163,21 @@ async fn join(
 ) -> Result<()> {
     let name = conn.name.unwrap_or_else(default_name);
     let outbox = Outbox::default();
+    let (mic, speaker) = audio.clone().unwrap_or_default();
+    let link = Arc::new(OnceLock::new());
     let connect = session::connect(&conn.server, &room, &name, outbox.clone());
+    let audio = start_audio(audio, session::late_audio_sender(link.clone()));
+    let connect = async {
+        let (session, audio) = tokio::join!(connect, audio);
+        anyhow::Ok((session?, audio))
+    };
     let publisher = Publisher::start(Source::parse(&video.video), video.fps, outbox, video_on);
     let mut terminal;
-    let session = if intro {
+    let (session, (engine, notice)) = if intro {
         terminal = init_terminal();
         let waiting = format!("joining {room} on {}...", conn.server);
         match splash::play(&mut terminal, connect, &waiting).await {
-            Ok(Some(session)) => session,
+            Ok(Some(joined)) => joined,
             quit_or_error => {
                 restore_terminal();
                 return quit_or_error.map(|_| ());
@@ -178,25 +185,12 @@ async fn join(
         }
     } else {
         eprintln!("joining {room} on {} as {name}...", conn.server);
-        let session = connect.await?;
+        let joined = connect.await?;
         terminal = init_terminal();
-        session
+        joined
     };
 
-    let (engine, notice) = match &audio {
-        None => (None, None),
-        Some((mic, speaker)) => {
-            let opts = Options {
-                input: Input::Device(mic.clone()),
-                output: Output::Device(speaker.clone()),
-            };
-            match Engine::start(opts, session::audio_sender(session.connection.clone())) {
-                Ok(engine) => (Some(Arc::new(engine)), None),
-                Err(e) => (None, Some(format!("audio off: {e:#}"))),
-            }
-        }
-    };
-    let (mic, speaker) = audio.unwrap_or_default();
+    let _ = link.set(session.connection.clone());
     if let Some(engine) = &engine {
         tokio::spawn(session::receive_audio(
             session.connection.clone(),
@@ -228,6 +222,24 @@ async fn join(
         eprintln!("disconnected: {reason}");
     }
     Ok(())
+}
+
+async fn start_audio(
+    devices: Option<(Option<String>, Option<String>)>,
+    send: impl FnMut(u16, Vec<u8>) + Send + 'static,
+) -> (Option<Arc<Engine>>, Option<String>) {
+    let Some((mic, speaker)) = devices else {
+        return (None, None);
+    };
+    let opts = Options {
+        input: Input::Device(mic),
+        output: Output::Device(speaker),
+    };
+    let started = tokio::task::spawn_blocking(move || Engine::start(opts, send)).await;
+    match started.map_err(anyhow::Error::from).flatten() {
+        Ok(engine) => (Some(Arc::new(engine)), None),
+        Err(e) => (None, Some(format!("audio off: {e:#}"))),
+    }
 }
 
 fn init_terminal() -> DefaultTerminal {
