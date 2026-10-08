@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 axum = { version = "0.8.9", features = ["ws"] }
-facetty-proto = { version = "0.1.0", path = "../proto" }
+facetty-proto = { version = "0.2.0", path = "../proto" }
 getrandom = "0.4.3"
 serde = "1.0.229"
 serde_json = "1.0.151"

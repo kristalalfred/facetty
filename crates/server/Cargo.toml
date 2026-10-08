@@ -10,9 +10,9 @@ description = "Server for facetty calls"
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-facetty-proto = { version = "0.1.0", path = "../proto" }
-facetty-sfu = { version = "0.1.0", path = "../sfu" }
-facetty-signal = { version = "0.1.0", path = "../signal" }
+facetty-proto = { version = "0.2.0", path = "../proto" }
+facetty-sfu = { version = "0.2.0", path = "../sfu" }
+facetty-signal = { version = "0.2.0", path = "../signal" }
 clap = { version = "4.6.7", features = ["derive", "env"] }
 getrandom = "0.4.3"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "logging"] }

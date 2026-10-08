@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "facetty"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -930,7 +930,7 @@ dependencies = [
 
 [[package]]
 name = "facetty-ascii"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "image",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "facetty-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "facetty-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "hmac",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "facetty-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "facetty-sfu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "facetty-signal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "facetty-proto",
