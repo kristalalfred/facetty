@@ -54,7 +54,8 @@ Set `FACETTY_SERVER` to leave out `--server`. On macOS, allow camera,
 microphone, and local-network access when prompted. Use headphones; there is no
 echo cancellation.
 
-`facetty preview` checks your camera without joining a call. `facetty devices`
+`facetty preview` checks your camera without joining a call. Press `d` in a
+call or preview to switch camera, microphone, or speaker. `facetty devices`
 lists devices and their selection flags; `--video camera:<index>` also takes
 part of a camera's name. `--video` also accepts `test`, and with `ffmpeg`
 installed, a file (looped) or a URL.

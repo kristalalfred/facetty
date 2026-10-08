@@ -38,15 +38,8 @@ pub(crate) fn find(name: Option<&str>, input: bool) -> Result<Device> {
     } else {
         host.output_devices()?.collect()
     };
-    let lower = name.to_lowercase();
-    let found = devices
-        .iter()
-        .position(|d| device_name(d) == name)
-        .or_else(|| {
-            devices
-                .iter()
-                .position(|d| device_name(d).to_lowercase().contains(&lower))
-        })
+    let names: Vec<String> = devices.iter().map(device_name).collect();
+    let found = crate::pick_device(&names, name)
         .ok_or_else(|| anyhow!("no {} device matching {name:?}", direction(input)))?;
     Ok(devices.into_iter().nth(found).unwrap())
 }

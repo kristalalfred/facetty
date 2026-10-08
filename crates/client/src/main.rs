@@ -114,10 +114,7 @@ async fn main() -> Result<()> {
             speaker,
         } => {
             log_to_file()?;
-            let audio = (!no_audio).then(|| Options {
-                input: Input::Device(mic),
-                output: Output::Device(speaker),
-            });
+            let audio = (!no_audio).then_some((mic, speaker));
             join(code.to_ascii_lowercase(), conn, video, !no_video, audio).await
         }
         Cmd::Bot {
@@ -145,28 +142,28 @@ async fn join(
     conn: ConnArgs,
     video: VideoArgs,
     video_on: bool,
-    audio: Option<Options>,
+    audio: Option<(Option<String>, Option<String>)>,
 ) -> Result<()> {
     let name = conn.name.unwrap_or_else(default_name);
     eprintln!("joining {room} on {} as {name}...", conn.server);
     let (video_tx, video_rx) = mpsc::channel(4);
     let session = session::connect(&conn.server, &room, &name, video_rx).await?;
-    let source = Source::parse(&video.video);
-    let mirror_self = matches!(source, Source::Camera(_));
-    let publisher = Publisher::start(source, video.fps, video_tx, video_on);
+    let publisher = Publisher::start(Source::parse(&video.video), video.fps, video_tx, video_on);
 
-    let (engine, notice) = match audio {
+    let (engine, notice) = match &audio {
         None => (None, None),
-        Some(opts) => {
+        Some((mic, speaker)) => {
+            let opts = Options {
+                input: Input::Device(mic.clone()),
+                output: Output::Device(speaker.clone()),
+            };
             match Engine::start(opts, session::audio_sender(session.connection.clone())) {
-                Ok(engine) => {
-                    let problem = engine.device_problem();
-                    (Some(Arc::new(engine)), problem)
-                }
+                Ok(engine) => (Some(Arc::new(engine)), None),
                 Err(e) => (None, Some(format!("audio off: {e:#}"))),
             }
         }
     };
+    let (mic, speaker) = audio.unwrap_or_default();
     if let Some(engine) = &engine {
         tokio::spawn(session::receive_audio(
             session.connection.clone(),
@@ -182,9 +179,10 @@ async fn join(
         others: session.participants.clone(),
         publisher,
         audio: engine,
+        mic,
+        speaker,
         commands: Some(session.commands.clone()),
         notice,
-        mirror_self,
     });
     let mut terminal = init_terminal();
     let mut session = session;
@@ -220,9 +218,7 @@ fn release_mouse_and_paste() {
 
 async fn preview(video: VideoArgs) -> Result<()> {
     let (video_tx, _video_rx) = mpsc::channel(1);
-    let source = Source::parse(&video.video);
-    let mirror_self = matches!(source, Source::Camera(_));
-    let publisher = Publisher::start(source, video.fps, video_tx, true);
+    let publisher = Publisher::start(Source::parse(&video.video), video.fps, video_tx, true);
     let app = App::new(Setup {
         room: "preview".into(),
         me: Participant {
@@ -234,9 +230,10 @@ async fn preview(video: VideoArgs) -> Result<()> {
         others: Vec::new(),
         publisher,
         audio: None,
+        mic: None,
+        speaker: None,
         commands: None,
         notice: None,
-        mirror_self,
     });
     let mut terminal = ratatui::init();
     let result = app.run(&mut terminal, None).await;

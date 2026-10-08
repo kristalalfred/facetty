@@ -14,11 +14,14 @@ use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
+use crate::camera;
+use crate::capture::Source;
 use crate::chat::{self, Chat};
 use crate::desktop;
 use crate::layout;
+use crate::picker::{self, Choice, Picker};
 use crate::publisher::Publisher;
 use crate::session::{Command, Event};
 use crate::ui::{self, Palette, Tile};
@@ -26,7 +29,8 @@ use crate::ui::{self, Palette, Tile};
 const SPEAKING_LEVEL: f32 = 0.35;
 const CHAT_WIDTH: u16 = 38;
 const MIN_CHAT_WIDTH: u16 = 20;
-const FLASH: Duration = Duration::from_secs(4);
+const TOAST_TIME: Duration = Duration::from_secs(4);
+const MAX_TOASTS: usize = 4;
 const REACTION_TIME: Duration = Duration::from_secs(4);
 const MAX_REACTIONS: usize = 12;
 
@@ -34,6 +38,17 @@ const MAX_REACTIONS: usize = 12;
 enum View {
     Grid,
     Speaker,
+}
+
+struct Toast {
+    kind: Option<&'static str>,
+    text: String,
+    at: Instant,
+}
+
+struct DeviceLists {
+    cameras: Vec<String>,
+    audio: Option<Result<(Vec<String>, Vec<String>)>>,
 }
 
 struct Reaction {
@@ -58,11 +73,15 @@ pub struct App {
     view: View,
     palette: Palette,
     truecolor: bool,
-    flash: Option<(String, Instant)>,
+    toasts: Vec<Toast>,
+    picker: Option<Picker>,
+    listing: Option<oneshot::Receiver<DeviceLists>>,
     publisher: Publisher,
     audio: Option<Arc<facetty_audio::Engine>>,
+    mic: Option<String>,
+    speaker: Option<String>,
+    device_problem: Option<String>,
     commands: Option<mpsc::UnboundedSender<Command>>,
-    mirror_self: bool,
     closed: Option<String>,
     quit: bool,
 }
@@ -73,9 +92,10 @@ pub struct Setup {
     pub others: Vec<Participant>,
     pub publisher: Publisher,
     pub audio: Option<Arc<facetty_audio::Engine>>,
+    pub mic: Option<String>,
+    pub speaker: Option<String>,
     pub commands: Option<mpsc::UnboundedSender<Command>>,
     pub notice: Option<String>,
-    pub mirror_self: bool,
 }
 
 impl App {
@@ -98,13 +118,17 @@ impl App {
             chat_open: false,
             input: None,
             view: View::Grid,
-            palette: Palette::Vivid,
+            palette: Palette::Natural,
             truecolor,
-            flash: None,
+            toasts: Vec::new(),
+            picker: None,
+            listing: None,
             publisher: setup.publisher,
             audio: setup.audio,
+            mic: setup.mic,
+            speaker: setup.speaker,
+            device_problem: None,
             commands: setup.commands,
-            mirror_self: setup.mirror_self,
             closed: None,
             quit: false,
             me,
@@ -173,7 +197,7 @@ impl App {
             }
             Event::Chat { name, text } => {
                 if !self.chat_open {
-                    self.flash(format!("{name}: {text}"));
+                    self.notify(format!("{name}: {text}"));
                 }
                 self.chat.push(Some(&name), &text);
             }
@@ -214,6 +238,17 @@ impl App {
     fn on_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
+            return;
+        }
+        if let Some(picker) = &mut self.picker {
+            match picker.on_key(key) {
+                picker::Outcome::Stay => {}
+                picker::Outcome::Close => self.picker = None,
+                picker::Outcome::Pick(choice, label) => {
+                    self.picker = None;
+                    self.use_device(choice, label);
+                }
+            }
             return;
         }
         if let KeyCode::PageUp | KeyCode::PageDown = key.code {
@@ -261,6 +296,7 @@ impl App {
                 self.publisher.set_enabled(!self.me.video_off);
                 self.send_state();
             }
+            KeyCode::Char('d') => self.open_picker(),
             KeyCode::Char('l') => {
                 self.view = match self.view {
                     View::Grid => View::Speaker,
@@ -275,12 +311,15 @@ impl App {
             KeyCode::Enter | KeyCode::Char('/') => self.start_typing(),
             KeyCode::Char('p') => {
                 self.palette = self.palette.next();
-                self.notify(format!("palette: {}", self.palette.name()));
+                self.toast(Some("palette"), format!("palette: {}", self.palette.name()));
             }
             KeyCode::Char('e') => {
                 self.publisher.update_params(|p| p.edges = !p.edges);
                 let on = self.publisher.params().edges;
-                self.notify(format!("edges {}", if on { "on" } else { "off" }));
+                self.toast(
+                    Some("edges"),
+                    format!("edges {}", if on { "on" } else { "off" }),
+                );
             }
             KeyCode::Char('[') | KeyCode::Char(']') => {
                 let step = if key.code == KeyCode::Char(']') {
@@ -290,7 +329,8 @@ impl App {
                 };
                 self.publisher
                     .update_params(|p| p.exposure = (p.exposure + step).clamp(0.2, 4.0));
-                self.notify(format!("exposure {:.1}", self.publisher.params().exposure));
+                let exposure = self.publisher.params().exposure;
+                self.toast(Some("exposure"), format!("exposure {exposure:.1}"));
             }
             _ => {}
         }
@@ -299,12 +339,12 @@ impl App {
     fn on_mouse(&mut self, mouse: MouseEvent) {
         match self.chat.on_mouse(mouse) {
             Some(chat::Action::Copy(text)) => match desktop::copy(&text) {
-                Ok(()) => self.flash(format!("copied {} characters", text.chars().count())),
-                Err(e) => self.flash(format!("copy failed: {e:#}")),
+                Ok(()) => self.notify(format!("copied {} characters", text.chars().count())),
+                Err(e) => self.notify(format!("copy failed: {e:#}")),
             },
             Some(chat::Action::Open(url)) => {
                 if let Err(e) = desktop::open(&url) {
-                    self.flash(format!("could not open link: {e:#}"));
+                    self.notify(format!("could not open link: {e:#}"));
                 }
             }
             Some(chat::Action::Type) => self.start_typing(),
@@ -319,6 +359,84 @@ impl App {
         }
     }
 
+    /// Listing devices takes about half a second on macOS, so it runs off the
+    /// UI thread and the picker opens when it finishes.
+    fn open_picker(&mut self) {
+        if self.listing.is_some() {
+            return;
+        }
+        let with_audio = self.audio.is_some();
+        let (tx, rx) = oneshot::channel();
+        tokio::task::spawn_blocking(move || {
+            let _ = tx.send(DeviceLists {
+                cameras: camera::list(),
+                audio: with_audio.then(facetty_audio::list_devices),
+            });
+        });
+        self.listing = Some(rx);
+    }
+
+    fn poll_listing(&mut self) {
+        let Some(rx) = &mut self.listing else {
+            return;
+        };
+        let lists = match rx.try_recv() {
+            Ok(lists) => lists,
+            Err(oneshot::error::TryRecvError::Empty) => return,
+            Err(oneshot::error::TryRecvError::Closed) => {
+                self.listing = None;
+                return;
+            }
+        };
+        self.listing = None;
+        self.show_picker(lists);
+    }
+
+    fn show_picker(&mut self, DeviceLists { cameras, audio }: DeviceLists) {
+        let mut picker = Picker::default();
+        let current = match self.publisher.source() {
+            Source::Camera(device) => camera::pick(&cameras, device).ok(),
+            _ => None,
+        };
+        let choices = cameras
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| (Choice::Camera(i), name))
+            .collect();
+        picker.add("camera", choices, current);
+        match audio {
+            Some(Ok((mics, speakers))) => {
+                let (choices, current) = audio_choices(mics, self.mic.as_deref(), Choice::Mic);
+                picker.add("microphone", choices, current);
+                let (choices, current) =
+                    audio_choices(speakers, self.speaker.as_deref(), Choice::Speaker);
+                picker.add("speaker", choices, current);
+            }
+            Some(Err(e)) => self.notify(format!("could not list audio devices: {e:#}")),
+            None => {}
+        }
+        self.picker = Some(picker);
+    }
+
+    fn use_device(&mut self, choice: Choice, label: String) {
+        self.toast(Some(choice.kind()), format!("{}: {label}", choice.kind()));
+        match choice {
+            Choice::Camera(index) => self.publisher.set_source(Source::Camera(index.to_string())),
+            Choice::Mic(name) => {
+                if let Some(audio) = &self.audio {
+                    audio.set_mic(name.clone());
+                }
+                self.mic = name;
+            }
+            Choice::Speaker(name) => {
+                if let Some(audio) = &self.audio {
+                    audio.set_speaker(name.clone());
+                }
+                self.speaker = name;
+            }
+        }
+    }
+
     fn start_typing(&mut self) {
         if self.commands.is_some() {
             self.chat_open = true;
@@ -327,11 +445,19 @@ impl App {
     }
 
     fn draw(&mut self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+        self.poll_listing();
         let now = Instant::now();
         if let Some(audio) = &self.audio {
             for id in self.others.keys() {
                 if audio.level(*id) > SPEAKING_LEVEL {
                     self.last_spoke.insert(*id, now);
+                }
+            }
+            let problem = audio.device_problem();
+            if problem != self.device_problem {
+                self.device_problem = problem.clone();
+                if let Some(problem) = problem {
+                    self.notify(problem);
                 }
             }
         }
@@ -381,6 +507,12 @@ impl App {
             }
             self.draw_reactions(who.unwrap_or(self.me.id), inner, buf);
         }
+        self.toasts.retain(|t| t.at.elapsed() < TOAST_TIME);
+        let toasts: Vec<&str> = self.toasts.iter().map(|t| t.text.as_str()).collect();
+        ui::draw_toasts(buf, stage, &toasts);
+        if let Some(picker) = &mut self.picker {
+            picker.render(stage, buf);
+        }
         self.draw_status(status, buf);
     }
 
@@ -426,7 +558,7 @@ impl App {
         Tile {
             name: &format!("{} (you)", self.me.name),
             frame: frame.as_deref(),
-            mirror: self.mirror_self,
+            mirror: matches!(self.publisher.source(), Source::Camera(_)),
             muted: self.me.audio_muted,
             speaking,
             placeholder: &placeholder,
@@ -493,11 +625,6 @@ impl App {
     }
 
     fn draw_status(&mut self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
-        if let Some((_, at)) = &self.flash
-            && at.elapsed() > FLASH
-        {
-            self.flash = None;
-        }
         if self.picking {
             let hints: Vec<_> = signal::REACTIONS
                 .iter()
@@ -507,11 +634,9 @@ impl App {
             ui::draw_status(buf, area, &format!("{} | react", self.room), &hints);
             return;
         }
-        let people = self.others.len() + 1;
-        let left = match (&self.flash, &self.commands) {
-            (Some((msg, _)), _) => format!("{} | {msg}", self.room),
-            (None, Some(_)) => format!("{} | {people} in call", self.room),
-            (None, None) => self.room.clone(),
+        let left = match &self.commands {
+            Some(_) => format!("{} | {} in call", self.room, self.others.len() + 1),
+            None => self.room.clone(),
         };
         let mut hints = Vec::new();
         if self.audio.is_some() {
@@ -528,6 +653,7 @@ impl App {
             "cam on"
         };
         hints.push(("v", cam.to_string(), self.me.video_off));
+        hints.push(("d", "devices".to_string(), false));
         let view = match self.view {
             View::Grid => "grid",
             View::Speaker => "speaker",
@@ -544,12 +670,20 @@ impl App {
     }
 
     fn notify(&mut self, msg: String) {
-        self.chat.push(None, &msg);
-        self.flash(msg);
+        self.toast(None, msg);
     }
 
-    fn flash(&mut self, msg: String) {
-        self.flash = Some((msg, Instant::now()));
+    fn toast(&mut self, kind: Option<&'static str>, text: String) {
+        if kind.is_some() {
+            self.toasts.retain(|t| t.kind != kind);
+        }
+        self.toasts.push(Toast {
+            kind,
+            text,
+            at: Instant::now(),
+        });
+        let excess = self.toasts.len().saturating_sub(MAX_TOASTS);
+        self.toasts.drain(..excess);
     }
 
     fn send_state(&self) {
@@ -564,6 +698,24 @@ impl App {
             let _ = tx.send(cmd);
         }
     }
+}
+
+fn audio_choices(
+    names: Vec<String>,
+    chosen: Option<&str>,
+    choice: fn(Option<String>) -> Choice,
+) -> (Vec<(Choice, String)>, Option<usize>) {
+    let current = match chosen {
+        None => Some(0),
+        Some(name) => facetty_audio::pick_device(&names, name).map(|i| i + 1),
+    };
+    let mut choices = vec![(choice(None), "system default".to_string())];
+    choices.extend(
+        names
+            .into_iter()
+            .map(|name| (choice(Some(name.clone())), name)),
+    );
+    (choices, current)
 }
 
 fn reaction_for(key: char) -> Option<&'static str> {

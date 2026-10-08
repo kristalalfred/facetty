@@ -24,12 +24,14 @@ struct Control {
     rungs: Mutex<Vec<Rung>>,
     refresh: Mutex<Vec<Rung>>,
     self_view: Mutex<Option<(u16, u16)>>,
+    next_source: Mutex<Option<Source>>,
     params: Mutex<Params>,
     enabled: AtomicBool,
     stop: AtomicBool,
 }
 
 pub struct Publisher {
+    source: Source,
     control: Arc<Control>,
     self_frames: watch::Receiver<Option<Arc<Frame>>>,
     error: Arc<Mutex<Option<String>>>,
@@ -43,12 +45,13 @@ impl Publisher {
         });
         let (self_tx, self_frames) = watch::channel(None);
         let error = Arc::new(Mutex::new(None));
-        let worker = (control.clone(), error.clone());
+        let worker = (source.clone(), control.clone(), error.clone());
         thread::Builder::new()
             .name("publisher".into())
-            .spawn(move || run(source, fps.max(1), worker.0, worker.1, self_tx, out))
+            .spawn(move || run(worker.0, fps.max(1), worker.1, worker.2, self_tx, out))
             .expect("spawn publisher thread");
         Self {
+            source,
             control,
             self_frames,
             error,
@@ -66,6 +69,15 @@ impl Publisher {
 
     pub fn set_self_view(&self, size: Option<(u16, u16)>) {
         *self.control.self_view.lock().unwrap() = size;
+    }
+
+    pub fn source(&self) -> &Source {
+        &self.source
+    }
+
+    pub fn set_source(&mut self, source: Source) {
+        *self.control.next_source.lock().unwrap() = Some(source.clone());
+        self.source = source;
     }
 
     pub fn set_enabled(&self, enabled: bool) {
@@ -96,7 +108,7 @@ impl Drop for Publisher {
 }
 
 fn run(
-    source: Source,
+    mut source: Source,
     fps: u32,
     control: Arc<Control>,
     error: Arc<Mutex<Option<String>>>,
@@ -119,6 +131,12 @@ fn run(
             next = Instant::now();
         }
 
+        if let Some(next_source) = control.next_source.lock().unwrap().take() {
+            source = next_source;
+            if capture.take().is_some() {
+                self_tx.send_replace(None);
+            }
+        }
         if !control.enabled.load(Ordering::Relaxed) {
             if capture.take().is_some() {
                 self_tx.send_replace(None);

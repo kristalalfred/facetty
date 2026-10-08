@@ -170,6 +170,22 @@ impl Engine {
         self.shared.muted.store(muted, Ordering::Relaxed);
     }
 
+    /// Switches to the microphone `name` selects, or to the system default.
+    /// Does nothing if the engine did not open a microphone.
+    pub fn set_mic(&self, name: Option<String>) {
+        self.choose(true, name);
+    }
+
+    pub fn set_speaker(&self, name: Option<String>) {
+        self.choose(false, name);
+    }
+
+    fn choose(&self, mic: bool, name: Option<String>) {
+        if let Some(thread) = &self.device_thread {
+            let _ = thread.signals.send(DeviceSignal::Choose { mic, name });
+        }
+    }
+
     pub fn level(&self, publisher: u32) -> f32 {
         self.shared
             .levels
@@ -203,6 +219,10 @@ enum DeviceSignal {
         slot: usize,
         generation: u64,
         error: String,
+    },
+    Choose {
+        mic: bool,
+        name: Option<String>,
     },
 }
 
@@ -286,6 +306,13 @@ impl Slot {
         }
     }
 
+    fn choose(&mut self, name: Option<String>) {
+        self.name = name;
+        self.stream = None;
+        self.problem = None;
+        self.retry_at = Instant::now();
+    }
+
     fn fail(&mut self, error: String) {
         if self.stream.take().is_some() {
             let problem = format!("{}: {error}", self.label());
@@ -364,6 +391,13 @@ fn run_devices(
                 let slot = &mut slots[slot];
                 if slot.generation == generation {
                     slot.fail(error);
+                }
+            }
+            DeviceSignal::Choose { mic, name } => {
+                for slot in &mut slots {
+                    if matches!(slot.role, Role::Mic(_)) == mic {
+                        slot.choose(name.clone());
+                    }
                 }
             }
         }
@@ -494,6 +528,16 @@ impl Pacer {
     }
 }
 
+/// Which of `names` a device name selects: an exact match, or else the first
+/// name that contains it, ignoring case.
+pub fn pick_device(names: &[String], name: &str) -> Option<usize> {
+    let lower = name.to_lowercase();
+    names
+        .iter()
+        .position(|n| n == name)
+        .or_else(|| names.iter().position(|n| n.to_lowercase().contains(&lower)))
+}
+
 /// Names of the available (input, output) devices.
 pub fn list_devices() -> Result<(Vec<String>, Vec<String>)> {
     let host = cpal::default_host();
@@ -620,6 +664,14 @@ mod tests {
         listener.remove(7);
         assert_eq!(listener.level(7), 0.0);
         drop(publisher);
+    }
+
+    #[test]
+    fn picks_devices_by_exact_name_then_by_part() {
+        let names = ["USB Mic Pro".to_string(), "USB Mic".to_string()];
+        assert_eq!(pick_device(&names, "USB Mic"), Some(1));
+        assert_eq!(pick_device(&names, "mic"), Some(0));
+        assert_eq!(pick_device(&names, "headset"), None);
     }
 
     #[test]

@@ -3,12 +3,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph, Widget};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Palette {
-    Vivid,
     Natural,
+    Vivid,
     Mono,
     Matrix,
 }
@@ -16,10 +16,10 @@ pub enum Palette {
 impl Palette {
     pub fn next(self) -> Self {
         match self {
-            Palette::Vivid => Palette::Natural,
-            Palette::Natural => Palette::Mono,
+            Palette::Natural => Palette::Vivid,
+            Palette::Vivid => Palette::Mono,
             Palette::Mono => Palette::Matrix,
-            Palette::Matrix => Palette::Vivid,
+            Palette::Matrix => Palette::Natural,
         }
     }
 
@@ -158,6 +158,32 @@ pub fn draw_reaction(buf: &mut Buffer, area: Rect, emoji: &str, progress: f32, l
     buf.set_stringn(x, area.bottom() - 1 - rise, emoji, 2, Style::new());
 }
 
+pub fn draw_toasts(buf: &mut Buffer, area: Rect, toasts: &[&str]) {
+    if toasts.is_empty() || area.width < 8 || area.height < 4 {
+        return;
+    }
+    let lines: Vec<Line> = toasts.iter().map(|t| Line::raw(*t)).collect();
+    let widest = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let width = (widest + 4).min(area.width - 2);
+    let height = (lines.len() as u16 + 2).min(area.height - 1);
+    let rect = Rect {
+        x: area.right() - width - 1,
+        y: area.y + 1,
+        width,
+        height,
+    };
+    Clear.render(rect, buf);
+    Paragraph::new(lines)
+        .style(Style::new().fg(Color::White))
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::new().fg(Color::Cyan))
+                .padding(Padding::horizontal(1)),
+        )
+        .render(rect, buf);
+}
+
 pub fn draw_status(buf: &mut Buffer, area: Rect, left: &str, hints: &[(&str, String, bool)]) {
     let mut spans = vec![Span::styled(
         format!(" {left} "),
@@ -199,6 +225,24 @@ mod tests {
                 assert!(x >= area.x && x + 2 <= area.right(), "lane {lane} at {x}");
             }
         }
+    }
+
+    #[test]
+    fn toasts_sit_in_the_top_right_corner() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
+        draw_toasts(
+            &mut buf,
+            Rect::new(0, 0, 30, 10),
+            &["exposure 1.2", "ann joined"],
+        );
+        let row = |y: u16| (0..40).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        assert_eq!(row(0).trim(), "");
+        assert_eq!(
+            row(2),
+            format!("{}│ exposure 1.2 │{}", " ".repeat(13), " ".repeat(11))
+        );
+        assert_eq!(row(3).trim(), "│ ann joined   │");
+        assert_eq!(row(5).trim(), "");
     }
 
     #[test]

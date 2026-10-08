@@ -40,11 +40,7 @@ pub fn run(device: &str, stop: &AtomicBool, on_frame: impl FnMut(Image)) -> Resu
     platform::run(device, stop, on_frame)
 }
 
-#[cfg_attr(
-    not(any(target_os = "linux", target_os = "macos", windows)),
-    allow(dead_code)
-)]
-fn pick(names: &[String], device: &str) -> Result<usize> {
+pub fn pick(names: &[String], device: &str) -> Result<usize> {
     let found = match device.parse::<usize>() {
         Ok(index) => (index < names.len()).then_some(index),
         Err(_) => {
