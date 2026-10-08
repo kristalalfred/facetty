@@ -14,7 +14,7 @@ lint:
 fmt:
     cargo fmt --all
 
-# Signaling and media server on localhost; Ctrl-C stops both.
+# Run both servers; Ctrl-C stops them.
 servers:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -24,7 +24,7 @@ servers:
     ./target/debug/bits-sfu &
     wait
 
-# Host a call on your local network and print the command for others to join.
+# Host a LAN call and print join commands.
 share room="hangout" port="8740":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -47,13 +47,13 @@ share room="hangout" port="8740":
 join room="lobby" *args="":
     cargo run -q -p bits -- join {{room}} {{args}}
 
-# A headless participant that publishes a test pattern and a beeping tone.
+# Join headless with an audio tone.
 bot room="lobby" *args="--audio tone":
     cargo run -q -p bits -- bot {{room}} {{args}}
 
 preview *args="":
     cargo run -q -p bits -- preview {{args}}
 
-# Print an image as ASCII, for tuning the encoder: just ascii face.png 96 edge=0.8
+# Render an image as ASCII.
 ascii image cols="96" *args="":
     cargo run -q --release -p bits-ascii --example render -- {{image}} {{cols}} {{args}}
