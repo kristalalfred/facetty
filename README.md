@@ -46,6 +46,10 @@ client needs ALSA (`libasound2`).
 
 ## Client
 
+Upgrade with `brew upgrade kristalalfred/tap/facetty`. Homebrew refuses the
+short name `facetty` from a tap you have not trusted; `brew trust
+kristalalfred/tap` allows it.
+
 Set `FACETTY_SERVER` to leave out `--server`. On macOS, allow camera,
 microphone, and local-network access when prompted. Use headphones; there is no
 echo cancellation.
