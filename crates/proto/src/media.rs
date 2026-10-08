@@ -36,6 +36,10 @@ pub enum ServerControl {
     EncodeRungs {
         rungs: Vec<Rung>,
     },
+    /// A new subscriber needs this rung's next frame in full.
+    Refresh {
+        rung: Rung,
+    },
     Error {
         message: String,
     },

@@ -11,7 +11,7 @@ mod analysis;
 mod codec;
 
 pub use analysis::{Analyzer, Params};
-pub use codec::{DecodeError, decode, encode};
+pub use codec::{DecodeError, Decoder, Encoder};
 
 pub const FILL_GLYPHS: usize = 10;
 

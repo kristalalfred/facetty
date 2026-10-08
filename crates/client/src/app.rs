@@ -203,6 +203,7 @@ impl App {
                 }
             }
             Event::EncodeRungs(rungs) => self.publisher.set_rungs(rungs),
+            Event::Refresh(rung) => self.publisher.refresh(rung),
             Event::Closed(reason) => {
                 self.closed = Some(reason);
                 self.quit = true;

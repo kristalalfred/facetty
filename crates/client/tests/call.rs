@@ -274,3 +274,59 @@ async fn creation_needs_a_host_key_and_joining_needs_an_existing_code() {
     assert!(session.participants.is_empty());
     session.close().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_subscriber_gets_the_publisher_to_send_a_full_frame() {
+    let server = start_servers().await;
+    let code = session::create_call(&server, Some(HOST_KEY))
+        .await
+        .unwrap()
+        .code;
+    let (alice_video, alice_video_rx) = mpsc::channel(4);
+    let mut alice = session::connect(&server, &code, "alice", alice_video_rx)
+        .await
+        .unwrap();
+    let alice_publisher = Publisher::start(Source::Test, 30, alice_video, true);
+    let rung = ladder::best_fit(80, 24).unwrap();
+
+    let mut viewers = Vec::new();
+    for name in ["bob", "dave"] {
+        let (_video, video_rx) = mpsc::channel(4);
+        let mut viewer = session::connect(&server, &code, name, video_rx)
+            .await
+            .unwrap();
+        viewer
+            .commands
+            .send(Command::Subscribe {
+                publisher: alice.me.id,
+                rung: Some(rung),
+            })
+            .unwrap();
+        let first_viewer = viewers.is_empty();
+        let request = next_matching(&mut alice, |e| match e {
+            Event::EncodeRungs(r) if first_viewer => Some(Event::EncodeRungs(r)),
+            Event::Refresh(r) if !first_viewer => Some(Event::Refresh(r)),
+            _ => None,
+        })
+        .await;
+        match request {
+            Event::EncodeRungs(r) => alice_publisher.set_rungs(r),
+            Event::Refresh(r) => {
+                assert_eq!(r, rung);
+                alice_publisher.refresh(r);
+            }
+            _ => unreachable!(),
+        }
+        let frame = next_matching(&mut viewer, |e| match e {
+            Event::Video { frame, .. } => Some(frame),
+            _ => None,
+        })
+        .await;
+        assert!(frame.cells.iter().any(|c| c.glyph != 0), "frame is blank");
+        viewers.push(viewer);
+    }
+    for viewer in viewers {
+        viewer.close().await;
+    }
+    alice.close().await;
+}

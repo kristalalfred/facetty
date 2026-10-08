@@ -283,6 +283,7 @@ async fn bot(room: String, conn: ConnArgs, video: VideoArgs, audio: Option<Strin
                     info!(?rungs, "subscribers want");
                     publisher.set_rungs(rungs);
                 }
+                Some(Event::Refresh(rung)) => publisher.refresh(rung),
                 Some(Event::Joined(p)) => info!(name = p.name, id = p.id, "joined"),
                 Some(Event::Left(id)) => info!(id, "left"),
                 Some(Event::Chat { name, text }) => info!("{name}: {text}"),

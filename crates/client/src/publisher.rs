@@ -1,12 +1,13 @@
 //! Turns captured frames into ASCII at the sizes subscribers asked for, plus
 //! the local self-view at whatever size its tile has.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use facetty_ascii::{Analyzer, Frame, Params};
+use facetty_ascii::{Analyzer, Encoder, Frame, Params};
 use facetty_proto::ladder::{self, Rung};
 use tokio::sync::{mpsc, watch};
 
@@ -21,6 +22,7 @@ pub struct EncodedFrame {
 #[derive(Default)]
 struct Control {
     rungs: Mutex<Vec<Rung>>,
+    refresh: Mutex<Vec<Rung>>,
     self_view: Mutex<Option<(u16, u16)>>,
     params: Mutex<Params>,
     enabled: AtomicBool,
@@ -55,6 +57,11 @@ impl Publisher {
 
     pub fn set_rungs(&self, rungs: Vec<Rung>) {
         *self.control.rungs.lock().unwrap() = rungs;
+    }
+
+    /// Sends the next frame at `rung` in full.
+    pub fn refresh(&self, rung: Rung) {
+        self.control.refresh.lock().unwrap().push(rung);
     }
 
     pub fn set_self_view(&self, size: Option<(u16, u16)>) {
@@ -99,6 +106,7 @@ fn run(
     let interval = Duration::from_secs(1) / fps;
     let mut capture: Option<Capture> = None;
     let mut analyzer = Analyzer::new(Params::default());
+    let mut encoders: HashMap<Rung, Encoder> = HashMap::new();
     let mut last_seen = 0u64;
     let mut seq = 0u32;
     let mut next = Instant::now();
@@ -131,13 +139,22 @@ fn run(
         analyzer.analyze(&image);
 
         let rungs = control.rungs.lock().unwrap().clone();
+        encoders.retain(|rung, _| rungs.contains(rung));
+        for rung in std::mem::take(&mut *control.refresh.lock().unwrap()) {
+            if let Some(encoder) = encoders.get_mut(&rung) {
+                encoder.request_full();
+            }
+        }
         for rung in rungs {
             let Some(size) = ladder::size(rung) else {
                 continue;
             };
             seq = seq.wrapping_add(1);
-            let payload = facetty_ascii::encode(&analyzer.render(size.cols, size.rows));
-            let _ = out.try_send(EncodedFrame { rung, seq, payload });
+            let encoder = encoders.entry(rung).or_default();
+            let payload = encoder.encode(&analyzer.render(size.cols, size.rows));
+            if out.try_send(EncodedFrame { rung, seq, payload }).is_err() {
+                encoder.undo();
+            }
         }
 
         let self_view = *control.self_view.lock().unwrap();

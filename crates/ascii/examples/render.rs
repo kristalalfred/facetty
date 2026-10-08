@@ -36,7 +36,7 @@ fn main() {
     let t = Instant::now();
     let frame = analyzer.render(cols, rows);
     let render = t.elapsed();
-    let encoded = facetty_ascii::encode(&frame);
+    let encoded = facetty_ascii::Encoder::default().encode(&frame);
 
     for (r, line) in frame.lines().enumerate() {
         if color {

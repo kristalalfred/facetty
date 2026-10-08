@@ -1,12 +1,13 @@
 //! Connection to a call: the signaling WebSocket plus the QUIC media
 //! connection to the SFU it points at.
 
+use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use facetty_ascii::Frame;
+use facetty_ascii::{Decoder, Frame};
 use facetty_proto::ladder::Rung;
 use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
 use facetty_proto::signal::{CallInvite, ClientEvent, MediaServer, Participant, ServerEvent};
@@ -42,6 +43,8 @@ pub enum Event {
         frame: Arc<Frame>,
     },
     EncodeRungs(Vec<Rung>),
+    /// Send this rung's next frame in full.
+    Refresh(Rung),
     Closed(String),
 }
 
@@ -258,6 +261,9 @@ pub async fn connect(
                         Ok(Some(ServerControl::EncodeRungs { rungs })) => {
                             let _ = events_control.send(Event::EncodeRungs(rungs));
                         }
+                        Ok(Some(ServerControl::Refresh { rung })) => {
+                            let _ = events_control.send(Event::Refresh(rung));
+                        }
                         Ok(Some(ServerControl::Error { message })) => {
                             let _ = events_control.send(Event::Closed(format!("media server: {message}")));
                         }
@@ -309,9 +315,20 @@ pub fn audio_sender(connection: quinn::Connection) -> impl FnMut(u16, Vec<u8>) +
     }
 }
 
+#[derive(Default)]
+struct Incoming {
+    seq: Option<u32>,
+    decoder: Decoder,
+}
+
+/// Frames arrive on concurrent streams, so one can overtake another. Each
+/// publisher's frames are decoded in order and older ones dropped, since an
+/// update only makes sense on top of the frames sent before it.
 async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSender<Event>) {
+    let incoming: Arc<Mutex<HashMap<ParticipantId, Incoming>>> = Arc::default();
     while let Ok(mut stream) = connection.accept_uni().await {
         let events = events.clone();
+        let incoming = incoming.clone();
         tokio::spawn(async move {
             let Ok(bytes) = stream.read_to_end(media::MAX_VIDEO_FRAME).await else {
                 return;
@@ -319,7 +336,19 @@ async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSen
             let Ok(msg) = media::decode::<VideoFrame>(&bytes) else {
                 return;
             };
-            match facetty_ascii::decode(&msg.payload) {
+            let decoded = {
+                let mut incoming = incoming.lock().unwrap();
+                let stream = incoming.entry(msg.publisher).or_default();
+                if stream
+                    .seq
+                    .is_some_and(|last| (msg.seq.wrapping_sub(last) as i32) <= 0)
+                {
+                    return;
+                }
+                stream.seq = Some(msg.seq);
+                stream.decoder.decode(&msg.payload)
+            };
+            match decoded {
                 Ok(frame) => {
                     let _ = events.send(Event::Video {
                         publisher: msg.publisher,

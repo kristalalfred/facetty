@@ -107,11 +107,20 @@ impl Membership {
                 room.subscriptions.remove(&key);
             }
             Some(rung) => {
-                if let Some(sub) = room.subscriptions.get_mut(&key) {
-                    sub.rung = rung;
+                let changed = if let Some(sub) = room.subscriptions.get_mut(&key) {
+                    std::mem::replace(&mut sub.rung, rung) != rung
                 } else if let Some(me) = room.members.get(&self.participant) {
                     room.subscriptions
                         .insert(key, Subscription::start(me.conn.clone(), rung));
+                    true
+                } else {
+                    false
+                };
+                if changed
+                    && let Some(member) = room.members.get(&publisher)
+                    && member.encode_rungs.contains(&rung)
+                {
+                    let _ = member.control.send(ServerControl::Refresh { rung });
                 }
             }
         }
