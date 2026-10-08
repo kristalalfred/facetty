@@ -9,9 +9,9 @@ description = "Video calls in your terminal, drawn in ASCII"
 
 [dependencies]
 anyhow = "1.0.104"
-facetty-ascii = { version = "0.2.0", path = "../ascii" }
-facetty-audio = { version = "0.2.0", path = "../audio" }
-facetty-proto = { version = "0.2.0", path = "../proto" }
+facetty-ascii = { version = "0.2.1", path = "../ascii" }
+facetty-audio = { version = "0.2.1", path = "../audio" }
+facetty-proto = { version = "0.2.1", path = "../proto" }
 bytes = "1.12.1"
 clap = { version = "4.6.7", features = ["derive", "env"] }
 crossterm = { version = "0.29.0", features = ["event-stream", "use-dev-tty"] }

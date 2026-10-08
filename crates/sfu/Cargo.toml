@@ -6,8 +6,8 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-facetty-ascii = { version = "0.2.0", path = "../ascii" }
-facetty-proto = { version = "0.2.0", path = "../proto" }
+facetty-ascii = { version = "0.2.1", path = "../ascii" }
+facetty-proto = { version = "0.2.1", path = "../proto" }
 bytes = "1.12.1"
 hex = "0.4.3"
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log"] }
