@@ -273,6 +273,7 @@ async fn bot(room: String, conn: ConnArgs, video: VideoArgs, audio: Option<Strin
                 Some(Event::Joined(p)) => info!(name = p.name, id = p.id, "joined"),
                 Some(Event::Left(id)) => info!(id, "left"),
                 Some(Event::Chat { name, text }) => info!("{name}: {text}"),
+                Some(Event::Reaction { from, emoji }) => info!(from, "{emoji}"),
                 Some(Event::Closed(reason)) => {
                     info!(reason, "disconnected");
                     break;

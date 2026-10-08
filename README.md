@@ -31,6 +31,7 @@ Use headphones. There is no echo cancellation, so speakers feed back into the mi
 | `v` | camera on / off |
 | `l` | grid / speaker view |
 | `t` | open the chat and type, or hide it; `Enter` or `/` to type, `Esc` to stop |
+| `1`–`8` | react: 👍 👏 😂 😮 💖 🎉 👋 🤔 floats up your tile for everyone; `r` shows which number is which |
 | `p` | palette: vivid, natural, mono, matrix |
 | `e`, `[`, `]` | edges on / off, exposure down / up (changes what others see) |
 | `q` | leave |
@@ -71,7 +72,7 @@ takes `test` or any input ffmpeg can open (a file loops).
 | `bits-ascii` | The encoder (a CPU port of Acerola's ASCII shader) and the frame wire format |
 | `bits-audio` | Mic and speaker via cpal, Opus via a pure-Rust libopus, jitter buffer, mixer |
 | `bits-proto` | Wire messages, the simulcast ladder, join tokens |
-| `bits-signal` | Binary. Rooms, roster, chat; assigns a media server and signs tokens |
+| `bits-signal` | Binary. Rooms, roster, chat, reactions; assigns a media server and signs tokens |
 | `bits-sfu` | Binary. Forwards video frames and audio packets over QUIC |
 | `bits` | Binary. The TUI (`join`, `preview`), headless `bot`, `devices` |
 

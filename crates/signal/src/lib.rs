@@ -307,6 +307,11 @@ fn handle(signal: &Signal, room_name: &str, id: ParticipantId, event: ClientEven
                 text,
             });
         }
+        ClientEvent::React { emoji } => {
+            if room.members.contains_key(&id) && signal::REACTIONS.contains(&emoji.as_str()) {
+                room.broadcast(&ServerEvent::Reaction { from: id, emoji });
+            }
+        }
     }
 }
 

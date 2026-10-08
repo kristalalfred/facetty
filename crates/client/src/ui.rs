@@ -146,6 +146,18 @@ fn draw_frame(
     }
 }
 
+/// `progress` runs from 0 at the bottom of `area` to 1 at the top. `lane`
+/// picks the column; consecutive lanes land far apart.
+pub fn draw_reaction(buf: &mut Buffer, area: Rect, emoji: &str, progress: f32, lane: u16) {
+    if area.width < 2 || area.height == 0 {
+        return;
+    }
+    let rise = (progress.clamp(0.0, 1.0) * (area.height - 1) as f32).round() as u16;
+    let columns = (area.width - 1) as f32;
+    let x = area.x + ((lane as f32 * 0.618_034).fract() * columns) as u16;
+    buf.set_stringn(x, area.bottom() - 1 - rise, emoji, 2, Style::new());
+}
+
 pub fn draw_status(buf: &mut Buffer, area: Rect, left: &str, hints: &[(&str, String, bool)]) {
     let mut spans = vec![Span::styled(
         format!(" {left} "),
@@ -162,4 +174,37 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, left: &str, hints: &[(&str, Str
         spans.push(Span::styled(format!(" {label}"), style));
     }
     Paragraph::new(Line::from(spans)).render(area, buf);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find(buf: &Buffer, emoji: &str) -> Option<(u16, u16)> {
+        buf.area
+            .positions()
+            .find(|p| buf[(p.x, p.y)].symbol() == emoji)
+            .map(|p| (p.x, p.y))
+    }
+
+    #[test]
+    fn reactions_rise_from_the_bottom_and_stay_inside() {
+        let area = Rect::new(3, 2, 10, 5);
+        for (progress, row) in [(0.0, 6), (0.5, 4), (1.0, 2), (1.5, 2)] {
+            for lane in 0..20 {
+                let mut buf = Buffer::empty(Rect::new(0, 0, 16, 9));
+                draw_reaction(&mut buf, area, "🎉", progress, lane);
+                let (x, y) = find(&buf, "🎉").expect("drawn");
+                assert_eq!(y, row);
+                assert!(x >= area.x && x + 2 <= area.right(), "lane {lane} at {x}");
+            }
+        }
+    }
+
+    #[test]
+    fn reactions_skip_tiles_too_small_for_them() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 4));
+        draw_reaction(&mut buf, Rect::new(0, 0, 1, 4), "🎉", 0.0, 0);
+        assert_eq!(find(&buf, "🎉"), None);
+    }
 }

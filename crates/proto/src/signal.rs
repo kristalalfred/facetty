@@ -45,6 +45,10 @@ pub enum ServerEvent {
         name: String,
         text: String,
     },
+    Reaction {
+        from: ParticipantId,
+        emoji: String,
+    },
     Error {
         message: String,
     },
@@ -55,6 +59,7 @@ pub enum ServerEvent {
 pub enum ClientEvent {
     SetState { audio_muted: bool, video_off: bool },
     Chat { text: String },
+    React { emoji: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -67,6 +72,10 @@ pub struct SfuHeartbeat {
 pub const MAX_NAME_LEN: usize = 32;
 pub const MAX_CHAT_LEN: usize = 500;
 pub const MAX_ROOM_LEN: usize = 64;
+
+/// The only emoji the signaling server forwards. All are two cells wide
+/// without a variation selector, so terminals agree on their width.
+pub const REACTIONS: [&str; 8] = ["👍", "👏", "😂", "😮", "💖", "🎉", "👋", "🤔"];
 
 pub fn valid_room(room: &str) -> bool {
     !room.is_empty()

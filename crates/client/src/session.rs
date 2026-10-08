@@ -32,6 +32,10 @@ pub enum Event {
         name: String,
         text: String,
     },
+    Reaction {
+        from: ParticipantId,
+        emoji: String,
+    },
     Video {
         publisher: ParticipantId,
         seq: u32,
@@ -47,6 +51,7 @@ pub enum Command {
         video_off: bool,
     },
     Chat(String),
+    React(String),
     Subscribe {
         publisher: ParticipantId,
         rung: Option<Rung>,
@@ -146,6 +151,9 @@ pub async fn connect(
                 Command::Chat(text) => {
                     let _ = ws_tx.send(ClientEvent::Chat { text });
                 }
+                Command::React(emoji) => {
+                    let _ = ws_tx.send(ClientEvent::React { emoji });
+                }
                 Command::Subscribe { publisher, rung } => {
                     let _ = control_tx.send(ClientControl::Subscribe { publisher, rung });
                 }
@@ -180,6 +188,7 @@ pub async fn connect(
                         ServerEvent::Left { id } => Event::Left(id),
                         ServerEvent::Updated { participant } => Event::Updated(participant),
                         ServerEvent::Chat { name, text, .. } => Event::Chat { name, text },
+                        ServerEvent::Reaction { from, emoji } => Event::Reaction { from, emoji },
                         ServerEvent::Error { message } => break message,
                         ServerEvent::Welcome { .. } => continue,
                     };

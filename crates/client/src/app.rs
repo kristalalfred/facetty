@@ -6,7 +6,7 @@ use anyhow::Result;
 use bits_ascii::Frame;
 use bits_proto::ParticipantId;
 use bits_proto::ladder::{self, Rung};
-use bits_proto::signal::Participant;
+use bits_proto::signal::{self, Participant};
 use crossterm::event::{
     Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
 };
@@ -27,11 +27,19 @@ const SPEAKING_LEVEL: f32 = 0.35;
 const CHAT_WIDTH: u16 = 38;
 const MIN_CHAT_WIDTH: u16 = 20;
 const FLASH: Duration = Duration::from_secs(4);
+const REACTION_TIME: Duration = Duration::from_secs(4);
+const MAX_REACTIONS: usize = 12;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
     Grid,
     Speaker,
+}
+
+struct Reaction {
+    emoji: String,
+    at: Instant,
+    lane: u16,
 }
 
 pub struct App {
@@ -41,6 +49,9 @@ pub struct App {
     frames: HashMap<ParticipantId, (u32, Arc<Frame>)>,
     subscriptions: HashMap<ParticipantId, Option<Rung>>,
     last_spoke: HashMap<ParticipantId, Instant>,
+    reactions: HashMap<ParticipantId, Vec<Reaction>>,
+    next_lane: u16,
+    picking: bool,
     chat: Chat,
     chat_open: bool,
     input: Option<String>,
@@ -80,6 +91,9 @@ impl App {
             frames: HashMap::new(),
             subscriptions: HashMap::new(),
             last_spoke: HashMap::new(),
+            reactions: HashMap::new(),
+            next_lane: 0,
+            picking: false,
             chat: Chat::default(),
             chat_open: false,
             input: None,
@@ -145,6 +159,7 @@ impl App {
                 self.frames.remove(&id);
                 self.subscriptions.remove(&id);
                 self.last_spoke.remove(&id);
+                self.reactions.remove(&id);
                 if let Some(audio) = &self.audio {
                     audio.remove(id);
                 }
@@ -161,6 +176,18 @@ impl App {
                     self.flash(format!("{name}: {text}"));
                 }
                 self.chat.push(Some(&name), &text);
+            }
+            Event::Reaction { from, emoji } => {
+                let floating = self.reactions.entry(from).or_default();
+                floating.retain(|r| r.at.elapsed() < REACTION_TIME);
+                if floating.len() < MAX_REACTIONS {
+                    floating.push(Reaction {
+                        emoji,
+                        at: Instant::now(),
+                        lane: self.next_lane,
+                    });
+                    self.next_lane = self.next_lane.wrapping_add(1);
+                }
             }
             Event::Video {
                 publisher,
@@ -211,7 +238,15 @@ impl App {
             }
             return;
         }
+        let picking = std::mem::take(&mut self.picking);
         match key.code {
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                if let Some(emoji) = reaction_for(c) {
+                    self.send(Command::React(emoji.to_string()));
+                }
+            }
+            _ if picking => {}
+            KeyCode::Char('r') if self.commands.is_some() => self.picking = true,
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Char('m') if self.audio.is_some() => {
                 self.me.audio_muted = !self.me.audio_muted;
@@ -343,6 +378,7 @@ impl App {
                 None => self.draw_self(rect, inner, buf),
                 Some(id) => self.draw_remote(*id, rect, inner, buf),
             }
+            self.draw_reactions(who.unwrap_or(self.me.id), inner, buf);
         }
         self.draw_status(status, buf);
     }
@@ -444,11 +480,31 @@ impl App {
         .render(rect, buf);
     }
 
+    fn draw_reactions(&mut self, id: ParticipantId, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+        let Some(floating) = self.reactions.get_mut(&id) else {
+            return;
+        };
+        floating.retain(|r| r.at.elapsed() < REACTION_TIME);
+        for r in floating.iter() {
+            let progress = r.at.elapsed().as_secs_f32() / REACTION_TIME.as_secs_f32();
+            ui::draw_reaction(buf, area, &r.emoji, progress, r.lane);
+        }
+    }
+
     fn draw_status(&mut self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
         if let Some((_, at)) = &self.flash
             && at.elapsed() > FLASH
         {
             self.flash = None;
+        }
+        if self.picking {
+            let hints: Vec<_> = signal::REACTIONS
+                .iter()
+                .enumerate()
+                .map(|(i, emoji)| (&"123456789"[i..=i], emoji.to_string(), false))
+                .collect();
+            ui::draw_status(buf, area, &format!("{} | react", self.room), &hints);
+            return;
         }
         let people = self.others.len() + 1;
         let left = match (&self.flash, &self.commands) {
@@ -478,6 +534,7 @@ impl App {
         hints.push(("l", view.to_string(), false));
         if self.commands.is_some() {
             hints.push(("t", "chat".to_string(), false));
+            hints.push(("r", "react".to_string(), false));
         }
         hints.push(("p", self.palette.name().to_string(), false));
         hints.push(("e/[/]", "look".to_string(), false));
@@ -506,6 +563,11 @@ impl App {
             let _ = tx.send(cmd);
         }
     }
+}
+
+fn reaction_for(key: char) -> Option<&'static str> {
+    let index = key.to_digit(10)?.checked_sub(1)?;
+    signal::REACTIONS.get(index as usize).copied()
 }
 
 async fn recv(events: &mut Option<mpsc::UnboundedReceiver<Event>>) -> Option<Event> {

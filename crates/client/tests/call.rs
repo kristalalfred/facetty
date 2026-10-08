@@ -67,7 +67,7 @@ impl Read for Tone {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn two_people_see_hear_and_chat() {
+async fn two_people_see_hear_chat_and_react() {
     let server = start_servers().await;
 
     let (alice_video, alice_video_rx) = mpsc::channel(4);
@@ -155,6 +155,15 @@ async fn two_people_see_hear_and_chat() {
     })
     .await;
     assert_eq!((name.as_str(), text.as_str()), ("alice", "hi bob"));
+
+    alice.commands.send(Command::React("hi".into())).unwrap();
+    alice.commands.send(Command::React("🎉".into())).unwrap();
+    let reaction = next_matching(&mut bob, |e| match e {
+        Event::Reaction { from, emoji } => Some((from, emoji)),
+        _ => None,
+    })
+    .await;
+    assert_eq!(reaction, (alice_id, "🎉".to_string()));
 
     bob.commands
         .send(Command::Subscribe {
