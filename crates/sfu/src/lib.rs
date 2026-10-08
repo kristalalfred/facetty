@@ -151,7 +151,7 @@ async fn read_video(conn: &Connection, membership: &Arc<room::Membership>) -> Re
                 return;
             };
             frame.publisher = membership.participant();
-            membership.publish_video(frame.rung, Bytes::from(media::encode(&frame)));
+            membership.publish_video(frame);
         });
     }
 }

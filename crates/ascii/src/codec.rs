@@ -104,10 +104,8 @@ impl Encoder {
             state.full_requested = false;
             (FULL, planes(&state.sent))
         } else {
-            let n = frame.cells.len();
             let cols = frame.cols.max(1) as usize;
-            let mut mask = vec![0u8; n.div_ceil(8)];
-            let mut changed = Vec::new();
+            let mut changes = Vec::new();
             for (i, (cell, sent)) in frame.cells.iter().zip(&mut state.sent).enumerate() {
                 let refresh = (i / cols) % REFRESH_PERIOD == state.count % REFRESH_PERIOD;
                 if drifted(cell, *sent) {
@@ -115,85 +113,181 @@ impl Encoder {
                 } else if !refresh {
                     continue;
                 }
-                mask[i / 8] |= 1 << (i % 8);
-                changed.push(*sent);
+                changes.push((i, *sent));
             }
-            mask.extend(planes(&changed));
-            (UPDATE, mask)
+            (UPDATE, update_body(frame.cells.len(), &changes))
         };
-        let body = zstd::bulk::compress(&body, ZSTD_LEVEL).expect("zstd compression into Vec");
-        let mut out = Vec::with_capacity(HEADER + body.len());
-        out.extend([VERSION, kind]);
-        out.extend(frame.cols.to_le_bytes());
-        out.extend(frame.rows.to_le_bytes());
-        out.extend(body);
-        out
+        seal(kind, frame.cols, frame.rows, &body)
     }
 }
 
-/// Decodes one stream of frames. An update for a size the decoder has no
-/// frame of applies to a blank frame.
+/// Decodes one stream of frames, numbered by the sender. Frames may arrive
+/// out of order: each cell keeps the value from the newest frame that set it,
+/// and a frame older than the last change of size is ignored. An update for a
+/// size the decoder has no frame of applies to a blank frame.
 #[derive(Default)]
 pub struct Decoder {
     cols: u16,
     rows: u16,
     cells: Vec<Packed>,
+    set_by: Vec<Option<u32>>,
+    newest: Option<u32>,
 }
 
 impl Decoder {
-    pub fn decode(&mut self, bytes: &[u8]) -> Result<Frame, DecodeError> {
-        if bytes.len() < HEADER {
-            return Err(DecodeError::Truncated);
+    /// Applies frame number `seq` and returns the picture so far.
+    pub fn decode(&mut self, seq: u32, bytes: &[u8]) -> Result<Frame, DecodeError> {
+        let Parsed { cols, rows, body } = parse(bytes)?;
+        if (cols, rows) != (self.cols, self.rows) {
+            if self.newest.is_some_and(|newest| is_newer(newest, seq)) {
+                return Ok(self.frame());
+            }
+            let n = cols as usize * rows as usize;
+            self.cols = cols;
+            self.rows = rows;
+            self.cells = vec![[0, 0]; n];
+            self.set_by = vec![None; n];
         }
-        if bytes[0] != VERSION {
-            return Err(DecodeError::Version(bytes[0]));
+        if self.newest.is_none_or(|newest| is_newer(seq, newest)) {
+            self.newest = Some(seq);
         }
-        let kind = bytes[1];
-        let cols = u16::from_le_bytes([bytes[2], bytes[3]]);
-        let rows = u16::from_le_bytes([bytes[4], bytes[5]]);
-        let n = cols as usize * rows as usize;
-        if n > MAX_CELLS {
-            return Err(DecodeError::TooLarge(cols, rows));
-        }
-        let mask_len = n.div_ceil(8);
-        let capacity = match kind {
-            FULL => 2 * n,
-            UPDATE => mask_len + 2 * n,
-            other => return Err(DecodeError::Kind(other)),
-        };
-        let body =
-            zstd::bulk::decompress(&bytes[HEADER..], capacity).map_err(|_| DecodeError::Corrupt)?;
-        if kind == FULL {
-            if body.len() != 2 * n {
-                return Err(DecodeError::Corrupt);
-            }
-            self.cells = unplanes(&body);
-        } else {
-            if body.len() < mask_len {
-                return Err(DecodeError::Corrupt);
-            }
-            let (mask, values) = body.split_at(mask_len);
-            let changed: Vec<usize> = (0..n)
-                .filter(|i| mask[i / 8] & (1 << (i % 8)) != 0)
-                .collect();
-            if values.len() != 2 * changed.len() {
-                return Err(DecodeError::Corrupt);
-            }
-            if (self.cols, self.rows) != (cols, rows) || self.cells.len() != n {
-                self.cells = vec![[0, 0]; n];
-            }
-            for (&i, value) in changed.iter().zip(unplanes(values)) {
+        let mut apply = |(i, value): (usize, Packed)| {
+            if self.set_by[i].is_none_or(|by| is_newer(seq, by)) {
                 self.cells[i] = value;
+                self.set_by[i] = Some(seq);
             }
+        };
+        match body {
+            Body::Full(cells) => cells.into_iter().enumerate().for_each(&mut apply),
+            Body::Update(changes) => changes.into_iter().for_each(&mut apply),
         }
-        self.cols = cols;
-        self.rows = rows;
-        Ok(Frame {
-            cols,
-            rows,
-            cells: self.cells.iter().copied().map(unpack).collect(),
-        })
+        Ok(self.frame())
     }
+
+    fn frame(&self) -> Frame {
+        Frame {
+            cols: self.cols,
+            rows: self.rows,
+            cells: self.cells.iter().copied().map(unpack).collect(),
+        }
+    }
+}
+
+/// Folds `newer` into `older`, two frames of one stream in that order, giving
+/// one frame that leaves a receiver as if it had decoded both. A sender whose
+/// link is still busy with earlier frames replaces a waiting frame with this
+/// instead of dropping it.
+pub fn merge(older: &[u8], newer: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    let new = parse(newer)?;
+    let Body::Update(changes) = new.body else {
+        return Ok(newer.to_vec());
+    };
+    let old = parse(older)?;
+    if (old.cols, old.rows) != (new.cols, new.rows) {
+        return Ok(newer.to_vec());
+    }
+    let n = new.cols as usize * new.rows as usize;
+    Ok(match old.body {
+        Body::Full(mut cells) => {
+            for (i, value) in changes {
+                cells[i] = value;
+            }
+            seal(FULL, new.cols, new.rows, &planes(&cells))
+        }
+        Body::Update(earlier) => {
+            let mut cells = vec![None; n];
+            for (i, value) in earlier.into_iter().chain(changes) {
+                cells[i] = Some(value);
+            }
+            let changes: Vec<(usize, Packed)> = cells
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, value)| Some((i, value?)))
+                .collect();
+            seal(UPDATE, new.cols, new.rows, &update_body(n, &changes))
+        }
+    })
+}
+
+enum Body {
+    Full(Vec<Packed>),
+    Update(Vec<(usize, Packed)>),
+}
+
+struct Parsed {
+    cols: u16,
+    rows: u16,
+    body: Body,
+}
+
+fn parse(bytes: &[u8]) -> Result<Parsed, DecodeError> {
+    if bytes.len() < HEADER {
+        return Err(DecodeError::Truncated);
+    }
+    if bytes[0] != VERSION {
+        return Err(DecodeError::Version(bytes[0]));
+    }
+    let kind = bytes[1];
+    let cols = u16::from_le_bytes([bytes[2], bytes[3]]);
+    let rows = u16::from_le_bytes([bytes[4], bytes[5]]);
+    let n = cols as usize * rows as usize;
+    if n > MAX_CELLS {
+        return Err(DecodeError::TooLarge(cols, rows));
+    }
+    let mask_len = n.div_ceil(8);
+    let capacity = match kind {
+        FULL => 2 * n,
+        UPDATE => mask_len + 2 * n,
+        other => return Err(DecodeError::Kind(other)),
+    };
+    let body =
+        zstd::bulk::decompress(&bytes[HEADER..], capacity).map_err(|_| DecodeError::Corrupt)?;
+    let body = if kind == FULL {
+        if body.len() != 2 * n {
+            return Err(DecodeError::Corrupt);
+        }
+        Body::Full(unplanes(&body))
+    } else {
+        if body.len() < mask_len {
+            return Err(DecodeError::Corrupt);
+        }
+        let (mask, values) = body.split_at(mask_len);
+        let changed: Vec<usize> = (0..n)
+            .filter(|i| mask[i / 8] & (1 << (i % 8)) != 0)
+            .collect();
+        if values.len() != 2 * changed.len() {
+            return Err(DecodeError::Corrupt);
+        }
+        Body::Update(changed.into_iter().zip(unplanes(values)).collect())
+    };
+    Ok(Parsed { cols, rows, body })
+}
+
+fn seal(kind: u8, cols: u16, rows: u16, body: &[u8]) -> Vec<u8> {
+    let body = zstd::bulk::compress(body, ZSTD_LEVEL).expect("zstd compression into Vec");
+    let mut out = Vec::with_capacity(HEADER + body.len());
+    out.extend([VERSION, kind]);
+    out.extend(cols.to_le_bytes());
+    out.extend(rows.to_le_bytes());
+    out.extend(body);
+    out
+}
+
+/// A bitmask of the changed cells out of `n`, then their two planes.
+/// `changes` must be in index order, the order the planes are read back in.
+fn update_body(n: usize, changes: &[(usize, Packed)]) -> Vec<u8> {
+    let mut body = vec![0u8; n.div_ceil(8)];
+    for &(i, _) in changes {
+        body[i / 8] |= 1 << (i % 8);
+    }
+    let values: Vec<Packed> = changes.iter().map(|&(_, value)| value).collect();
+    body.extend(planes(&values));
+    body
+}
+
+/// Whether frame number `a` comes after `b`, allowing for wraparound.
+fn is_newer(a: u32, b: u32) -> bool {
+    (a.wrapping_sub(b) as i32) > 0
 }
 
 fn planes(cells: &[Packed]) -> Vec<u8> {
@@ -243,7 +337,7 @@ mod tests {
     fn roundtrip_keeps_glyphs_and_quantizes_color() {
         let original = frame(3, 2, |i| cell(i as u8 * 2, i as u8 * 40));
         let back = Decoder::default()
-            .decode(&Encoder::default().encode(&original))
+            .decode(1, &Encoder::default().encode(&original))
             .unwrap();
         assert_eq!((back.cols, back.rows), (3, 2));
         for (a, b) in original.cells.iter().zip(&back.cells) {
@@ -260,7 +354,7 @@ mod tests {
         let mut decoder = Decoder::default();
         let first = frame(64, 64, |_| cell(1, 100));
         let full = encoder.encode(&first);
-        decoder.decode(&full).unwrap();
+        decoder.decode(1, &full).unwrap();
 
         let next = frame(64, 64, |i| match i {
             0 => cell(2, 100),
@@ -269,7 +363,7 @@ mod tests {
         });
         let update = encoder.encode(&next);
         assert_eq!(update[1], UPDATE);
-        let shown = decoder.decode(&update).unwrap();
+        let shown = decoder.decode(2, &update).unwrap();
         assert_eq!(shown.cells[0].glyph, 2);
         assert_eq!(shown.cells[1].rgb[0], 153);
         assert_eq!(
@@ -283,18 +377,18 @@ mod tests {
         let mut encoder = Encoder::default();
         let mut decoder = Decoder::default();
         decoder
-            .decode(&encoder.encode(&frame(4, 40, |_| cell(1, 0))))
+            .decode(1, &encoder.encode(&frame(4, 40, |_| cell(1, 0))))
             .unwrap();
         let changed = frame(4, 40, |_| cell(3, 255));
         let _missed = encoder.encode(&changed);
         let mut shown = None;
-        for _ in 0..REFRESH_PERIOD {
-            shown = Some(decoder.decode(&encoder.encode(&changed)).unwrap());
+        for seq in 3..3 + REFRESH_PERIOD as u32 {
+            shown = Some(decoder.decode(seq, &encoder.encode(&changed)).unwrap());
         }
         assert_eq!(
             shown.unwrap(),
             Decoder::default()
-                .decode(&Encoder::default().encode(&changed))
+                .decode(1, &Encoder::default().encode(&changed))
                 .unwrap()
         );
     }
@@ -304,13 +398,13 @@ mod tests {
         let mut encoder = Encoder::default();
         let mut decoder = Decoder::default();
         decoder
-            .decode(&encoder.encode(&frame(8, 2, |_| cell(1, 0))))
+            .decode(1, &encoder.encode(&frame(8, 2, |_| cell(1, 0))))
             .unwrap();
         let changed = frame(8, 2, |_| cell(4, 0));
         encoder.encode(&changed);
         encoder.undo();
         assert_eq!(
-            decoder.decode(&encoder.encode(&changed)).unwrap().cells[5].glyph,
+            decoder.decode(2, &encoder.encode(&changed)).unwrap().cells[5].glyph,
             4
         );
 
@@ -325,33 +419,136 @@ mod tests {
         let mut encoder = Encoder::default();
         encoder.encode(&frame(4, 1, |_| cell(1, 0)));
         let update = encoder.encode(&frame(4, 1, |i| cell(if i == 0 { 5 } else { 1 }, 0)));
-        let shown = Decoder::default().decode(&update).unwrap();
+        let shown = Decoder::default().decode(2, &update).unwrap();
         assert_eq!(shown.cells[0].glyph, 5);
         assert_eq!(shown.cells.len(), 4);
     }
 
     #[test]
+    fn late_frames_fill_in_only_what_newer_frames_left() {
+        let mut encoder = Encoder::default();
+        let full = encoder.encode(&frame(8, 1, |_| cell(1, 0)));
+        let both = encoder.encode(&frame(8, 1, |i| cell(if i < 2 { 2 } else { 1 }, 0)));
+        let one = encoder.encode(&frame(8, 1, |i| {
+            cell(if i < 2 { 2 + i as u8 } else { 1 }, 0)
+        }));
+
+        let mut decoder = Decoder::default();
+        decoder.decode(1, &full).unwrap();
+        decoder.decode(3, &one).unwrap();
+        let shown = decoder.decode(2, &both).unwrap();
+        assert_eq!(shown.cells[0].glyph, 2);
+        assert_eq!(
+            shown.cells[1].glyph, 3,
+            "the older frame does not undo the newer"
+        );
+    }
+
+    #[test]
+    fn frames_from_before_a_resize_are_ignored() {
+        let mut decoder = Decoder::default();
+        let small = Encoder::default().encode(&frame(4, 1, |_| cell(1, 0)));
+        let large = Encoder::default().encode(&frame(8, 1, |_| cell(2, 0)));
+        decoder.decode(5, &large).unwrap();
+        let shown = decoder.decode(4, &small).unwrap();
+        assert_eq!((shown.cols, shown.rows), (8, 1));
+        assert!(shown.cells.iter().all(|c| c.glyph == 2));
+    }
+
+    #[test]
+    fn merged_frames_decode_like_the_frames_they_replace() {
+        let pictures = [
+            frame(16, 4, |_| cell(1, 0)),
+            frame(16, 4, |i| cell(if i % 3 == 0 { 4 } else { 1 }, 0)),
+            frame(16, 4, |i| cell(if i % 5 == 0 { 6 } else { 1 }, 200)),
+        ];
+        let mut encoder = Encoder::default();
+        let [full, first, second] = pictures.each_ref().map(|p| encoder.encode(p));
+        let mut expected = Decoder::default();
+        for (seq, bytes) in [&full, &first, &second].into_iter().enumerate() {
+            expected.decode(seq as u32, bytes).unwrap();
+        }
+        let expected = expected.frame();
+
+        let updates = merge(&first, &second).unwrap();
+        assert_eq!(updates[1], UPDATE);
+        let mut decoder = Decoder::default();
+        decoder.decode(0, &full).unwrap();
+        assert_eq!(decoder.decode(2, &updates).unwrap(), expected);
+
+        let refreshed = merge(&full, &merge(&first, &second).unwrap()).unwrap();
+        assert_eq!(refreshed[1], FULL);
+        assert_eq!(Decoder::default().decode(2, &refreshed).unwrap(), expected);
+
+        assert_eq!(merge(&first, &full).unwrap(), full);
+    }
+
+    #[test]
+    fn merged_and_reordered_frames_end_on_the_same_picture() {
+        let mut encoder = Encoder::default();
+        let frames: Vec<(u32, Vec<u8>)> = (0..40u32)
+            .map(|t| {
+                if t == 17 {
+                    encoder.request_full();
+                }
+                let picture = frame(16, 8, |i| {
+                    cell(
+                        ((i as u32 * 7 + t * t) % 14) as u8,
+                        (i as u32 * t % 256) as u8,
+                    )
+                });
+                (t, encoder.encode(&picture))
+            })
+            .collect();
+        let mut in_order = Decoder::default();
+        for (seq, bytes) in &frames {
+            in_order.decode(*seq, bytes).unwrap();
+        }
+
+        let mut sent = Vec::new();
+        let mut waiting: Option<(u32, Vec<u8>)> = None;
+        for (seq, bytes) in frames {
+            waiting = Some(match waiting.take() {
+                Some((_, earlier)) if seq % 4 != 0 => (seq, merge(&earlier, &bytes).unwrap()),
+                earlier => {
+                    sent.extend(earlier);
+                    (seq, bytes)
+                }
+            });
+        }
+        sent.extend(waiting);
+        for pair in sent.chunks_mut(2) {
+            pair.reverse();
+        }
+        let mut decoder = Decoder::default();
+        for (seq, bytes) in &sent {
+            decoder.decode(*seq, bytes).unwrap();
+        }
+        assert_eq!(decoder.frame(), in_order.frame());
+    }
+
+    #[test]
     fn rejects_garbage() {
         let mut decoder = Decoder::default();
-        assert_eq!(decoder.decode(&[]), Err(DecodeError::Truncated));
+        assert_eq!(decoder.decode(1, &[]), Err(DecodeError::Truncated));
         assert_eq!(
-            decoder.decode(&[9, 0, 1, 0, 1, 0]),
+            decoder.decode(1, &[9, 0, 1, 0, 1, 0]),
             Err(DecodeError::Version(9))
         );
         assert_eq!(
-            decoder.decode(&[VERSION, 7, 1, 0, 1, 0]),
+            decoder.decode(1, &[VERSION, 7, 1, 0, 1, 0]),
             Err(DecodeError::Kind(7))
         );
         assert_eq!(
-            decoder.decode(&[VERSION, FULL, 1, 0, 1, 0, 1, 2, 3]),
+            decoder.decode(1, &[VERSION, FULL, 1, 0, 1, 0, 1, 2, 3]),
             Err(DecodeError::Corrupt)
         );
         assert_eq!(
-            decoder.decode(&[VERSION, FULL, 0xff, 0xff, 0xff, 0xff]),
+            decoder.decode(1, &[VERSION, FULL, 0xff, 0xff, 0xff, 0xff]),
             Err(DecodeError::TooLarge(0xffff, 0xffff))
         );
         let mut bogus = vec![VERSION, UPDATE, 8, 0, 1, 0];
         bogus.extend(zstd::bulk::compress(&[0b11, 1, 2], 3).unwrap());
-        assert_eq!(decoder.decode(&bogus), Err(DecodeError::Corrupt));
+        assert_eq!(decoder.decode(1, &bogus), Err(DecodeError::Corrupt));
     }
 }

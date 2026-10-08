@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use bytes::Bytes;
 use facetty_proto::ParticipantId;
 use facetty_proto::ladder::Rung;
-use facetty_proto::media::ServerControl;
+use facetty_proto::media::{ServerControl, VideoFrame, VideoSender};
 use quinn::Connection;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::debug;
 
@@ -27,6 +27,7 @@ struct Room {
 
 struct Member {
     conn: Connection,
+    video: Arc<VideoSender>,
     control: mpsc::UnboundedSender<ServerControl>,
     encode_rungs: Vec<Rung>,
     generation: u64,
@@ -34,8 +35,16 @@ struct Member {
 
 struct Subscription {
     rung: Rung,
-    latest: watch::Sender<Option<Bytes>>,
+    waiting: Arc<Waiting>,
     writer: JoinHandle<()>,
+}
+
+/// The frame a subscriber gets next. One that arrives while another still
+/// waits is merged into it, so a slow link skips frames but no changes.
+#[derive(Default)]
+struct Waiting {
+    frame: Mutex<Option<VideoFrame>>,
+    filled: Notify,
 }
 
 impl Drop for Subscription {
@@ -71,6 +80,7 @@ impl Rooms {
         room.members.insert(
             participant,
             Member {
+                video: VideoSender::new(conn.clone()),
                 conn,
                 control,
                 encode_rungs: Vec::new(),
@@ -108,10 +118,14 @@ impl Membership {
             }
             Some(rung) => {
                 let changed = if let Some(sub) = room.subscriptions.get_mut(&key) {
-                    std::mem::replace(&mut sub.rung, rung) != rung
+                    let changed = std::mem::replace(&mut sub.rung, rung) != rung;
+                    if changed {
+                        sub.waiting.take();
+                    }
+                    changed
                 } else if let Some(me) = room.members.get(&self.participant) {
                     room.subscriptions
-                        .insert(key, Subscription::start(me.conn.clone(), rung));
+                        .insert(key, Subscription::start(me.video.clone(), rung));
                     true
                 } else {
                     false
@@ -127,15 +141,22 @@ impl Membership {
         room.update_demand(publisher);
     }
 
-    pub fn publish_video(&self, rung: Rung, frame: Bytes) {
-        let rooms = self.rooms.lock();
-        let Some(room) = rooms.get(&self.room) else {
-            return;
+    pub fn publish_video(&self, frame: VideoFrame) {
+        let subscribers: Vec<Arc<Waiting>> = {
+            let rooms = self.rooms.lock();
+            let Some(room) = rooms.get(&self.room) else {
+                return;
+            };
+            room.subscriptions
+                .iter()
+                .filter(|((_, publisher), sub)| {
+                    *publisher == self.participant && sub.rung == frame.rung
+                })
+                .map(|(_, sub)| sub.waiting.clone())
+                .collect()
         };
-        for ((_, publisher), sub) in &room.subscriptions {
-            if *publisher == self.participant && sub.rung == rung {
-                sub.latest.send_replace(Some(frame.clone()));
-            }
+        for waiting in subscribers {
+            waiting.offer(frame.clone());
         }
     }
 
@@ -203,25 +224,19 @@ impl Room {
 }
 
 impl Subscription {
-    /// Forwards only the newest frame: while a write is stuck behind
-    /// congestion, newer frames overwrite older ones in the watch slot.
-    fn start(conn: Connection, rung: Rung) -> Self {
-        let (latest, mut rx) = watch::channel::<Option<Bytes>>(None);
+    fn start(video: Arc<VideoSender>, rung: Rung) -> Self {
+        let waiting = Arc::new(Waiting::default());
+        let next = waiting.clone();
         let writer = tokio::spawn(async move {
-            while rx.changed().await.is_ok() {
-                let Some(frame) = rx.borrow_and_update().clone() else {
+            loop {
+                next.filled().await;
+                video.ready().await;
+                let Some(frame) = next.take() else {
                     continue;
                 };
-                let result = async {
-                    let mut stream = conn.open_uni().await?;
-                    stream.write_all(&frame).await?;
-                    stream.finish()?;
-                    anyhow::Ok(())
-                }
-                .await;
-                if let Err(e) = result {
+                if let Err(e) = video.send(&frame).await {
                     debug!("video forward failed: {e}");
-                    if conn.close_reason().is_some() {
+                    if matches!(e, quinn::WriteError::ConnectionLost(_)) {
                         break;
                     }
                 }
@@ -229,8 +244,52 @@ impl Subscription {
         });
         Self {
             rung,
-            latest,
+            waiting,
             writer,
+        }
+    }
+}
+
+impl Waiting {
+    fn offer(&self, frame: VideoFrame) {
+        let mut waiting = self.frame.lock().unwrap_or_else(|e| e.into_inner());
+        *waiting = Some(match waiting.take() {
+            Some(earlier) => fold(earlier, frame),
+            None => frame,
+        });
+        drop(waiting);
+        self.filled.notify_one();
+    }
+
+    fn take(&self) -> Option<VideoFrame> {
+        self.frame.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+
+    async fn filled(&self) {
+        while self
+            .frame
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none()
+        {
+            self.filled.notified().await;
+        }
+    }
+}
+
+/// One frame with the changes of both. Frames can arrive out of order, and
+/// the one numbered later wins where both change a cell.
+fn fold(a: VideoFrame, b: VideoFrame) -> VideoFrame {
+    let (older, newer) = if (b.seq.wrapping_sub(a.seq) as i32) > 0 {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    match facetty_ascii::merge(&older.payload, &newer.payload) {
+        Ok(payload) => VideoFrame { payload, ..newer },
+        Err(e) => {
+            debug!("could not merge video frames: {e}");
+            newer
         }
     }
 }

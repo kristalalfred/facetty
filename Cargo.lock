@@ -955,6 +955,7 @@ dependencies = [
  "base64 0.23.1",
  "hmac",
  "postcard",
+ "quinn",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -985,6 +986,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "facetty-ascii",
  "facetty-proto",
  "hex",
  "quinn",

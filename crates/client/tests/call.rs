@@ -3,12 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use facetty::capture::Source;
-use facetty::publisher::Publisher;
+use facetty::publisher::{Outbox, Publisher};
 use facetty::session::{self, Command, Event, Session};
 use facetty_audio::{Engine, Input, Options, Output};
 use facetty_proto::ladder;
 use facetty_proto::signal::MediaServer;
-use tokio::sync::mpsc;
 use tokio::time::timeout;
 
 const SECRET: &[u8] = b"test-secret";
@@ -77,8 +76,8 @@ async fn invited_callers_see_hear_chat_and_react_with_other_calls_isolated() {
         .unwrap()
         .code;
 
-    let (alice_video, alice_video_rx) = mpsc::channel(4);
-    let mut alice = session::connect(&server, &code, "alice", alice_video_rx)
+    let alice_video = Outbox::default();
+    let mut alice = session::connect(&server, &code, "alice", alice_video.clone())
         .await
         .unwrap();
     let alice_publisher = Publisher::start(Source::Test, 30, alice_video, true);
@@ -91,8 +90,7 @@ async fn invited_callers_see_hear_chat_and_react_with_other_calls_isolated() {
     )
     .unwrap();
 
-    let (_bob_video, bob_video_rx) = mpsc::channel(4);
-    let mut bob = session::connect(&server, &code, "bob", bob_video_rx)
+    let mut bob = session::connect(&server, &code, "bob", Outbox::default())
         .await
         .unwrap();
     assert_eq!(bob.participants.len(), 1);
@@ -104,8 +102,7 @@ async fn invited_callers_see_hear_chat_and_react_with_other_calls_isolated() {
         .unwrap()
         .code;
     assert_ne!(other_code, code);
-    let (_carol_video, carol_video_rx) = mpsc::channel(4);
-    let mut carol = session::connect(&server, &other_code, "carol", carol_video_rx)
+    let mut carol = session::connect(&server, &other_code, "carol", Outbox::default())
         .await
         .unwrap();
     assert!(carol.participants.is_empty());
@@ -256,8 +253,7 @@ async fn creation_needs_a_host_key_and_joining_needs_an_existing_code() {
     let response = reqwest::get(format!("{server}/rooms/lobby")).await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 
-    let (_video, video_rx) = mpsc::channel(4);
-    let error = match session::connect(&server, "lobby", "guest", video_rx).await {
+    let error = match session::connect(&server, "lobby", "guest", Outbox::default()).await {
         Ok(_) => panic!("room names must not create calls"),
         Err(error) => error,
     };
@@ -267,10 +263,14 @@ async fn creation_needs_a_host_key_and_joining_needs_an_existing_code() {
         .await
         .unwrap()
         .code;
-    let (_video, video_rx) = mpsc::channel(4);
-    let session = session::connect(&server, &code.to_ascii_uppercase(), "guest", video_rx)
-        .await
-        .unwrap();
+    let session = session::connect(
+        &server,
+        &code.to_ascii_uppercase(),
+        "guest",
+        Outbox::default(),
+    )
+    .await
+    .unwrap();
     assert!(session.participants.is_empty());
     session.close().await;
 }
@@ -282,8 +282,8 @@ async fn a_late_subscriber_gets_the_publisher_to_send_a_full_frame() {
         .await
         .unwrap()
         .code;
-    let (alice_video, alice_video_rx) = mpsc::channel(4);
-    let mut alice = session::connect(&server, &code, "alice", alice_video_rx)
+    let alice_video = Outbox::default();
+    let mut alice = session::connect(&server, &code, "alice", alice_video.clone())
         .await
         .unwrap();
     let alice_publisher = Publisher::start(Source::Test, 30, alice_video, true);
@@ -291,8 +291,7 @@ async fn a_late_subscriber_gets_the_publisher_to_send_a_full_frame() {
 
     let mut viewers = Vec::new();
     for name in ["bob", "dave"] {
-        let (_video, video_rx) = mpsc::channel(4);
-        let mut viewer = session::connect(&server, &code, name, video_rx)
+        let mut viewer = session::connect(&server, &code, name, Outbox::default())
             .await
             .unwrap();
         viewer

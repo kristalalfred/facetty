@@ -9,7 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use facetty_ascii::{Decoder, Frame};
 use facetty_proto::ladder::Rung;
-use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
+use facetty_proto::media::{
+    self, AudioPacket, ClientControl, ServerControl, VideoFrame, VideoSender,
+};
 use facetty_proto::signal::{CallInvite, ClientEvent, MediaServer, Participant, ServerEvent};
 use facetty_proto::{ALPN, ParticipantId};
 use futures_util::{SinkExt, StreamExt};
@@ -23,7 +25,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
-use crate::publisher::EncodedFrame;
+use crate::publisher::Outbox;
 
 pub enum Event {
     Joined(Participant),
@@ -37,6 +39,9 @@ pub enum Event {
         from: ParticipantId,
         emoji: String,
     },
+    /// The publisher's picture after applying frame `seq`. Frames are
+    /// applied out of order, so the newest picture is the last event, not the
+    /// one with the highest `seq`.
     Video {
         publisher: ParticipantId,
         seq: u32,
@@ -132,12 +137,7 @@ pub async fn create_call(server: &str, host_key: Option<&str>) -> Result<CallInv
     Ok(response.error_for_status()?.json().await?)
 }
 
-pub async fn connect(
-    server: &str,
-    room: &str,
-    name: &str,
-    video_out: mpsc::Receiver<EncodedFrame>,
-) -> Result<Session> {
+pub async fn connect(server: &str, room: &str, name: &str, video_out: Outbox) -> Result<Session> {
     let url = ws_url(server, &room.to_ascii_lowercase(), name)?;
     let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str())
         .await
@@ -315,20 +315,14 @@ pub fn audio_sender(connection: quinn::Connection) -> impl FnMut(u16, Vec<u8>) +
     }
 }
 
-#[derive(Default)]
-struct Incoming {
-    seq: Option<u32>,
-    decoder: Decoder,
-}
-
-/// Frames arrive on concurrent streams, so one can overtake another. Each
-/// publisher's frames are decoded in order and older ones dropped, since an
-/// update only makes sense on top of the frames sent before it.
+/// Frames arrive on concurrent streams, so one can overtake another; the
+/// decoder sorts that out cell by cell. Events go out under the lock so they
+/// leave in the order the decoder applied them.
 async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSender<Event>) {
-    let incoming: Arc<Mutex<HashMap<ParticipantId, Incoming>>> = Arc::default();
+    let decoders: Arc<Mutex<HashMap<ParticipantId, Decoder>>> = Arc::default();
     while let Ok(mut stream) = connection.accept_uni().await {
         let events = events.clone();
-        let incoming = incoming.clone();
+        let decoders = decoders.clone();
         tokio::spawn(async move {
             let Ok(bytes) = stream.read_to_end(media::MAX_VIDEO_FRAME).await else {
                 return;
@@ -336,19 +330,9 @@ async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSen
             let Ok(msg) = media::decode::<VideoFrame>(&bytes) else {
                 return;
             };
-            let decoded = {
-                let mut incoming = incoming.lock().unwrap();
-                let stream = incoming.entry(msg.publisher).or_default();
-                if stream
-                    .seq
-                    .is_some_and(|last| (msg.seq.wrapping_sub(last) as i32) <= 0)
-                {
-                    return;
-                }
-                stream.seq = Some(msg.seq);
-                stream.decoder.decode(&msg.payload)
-            };
-            match decoded {
+            let mut decoders = decoders.lock().unwrap();
+            let decoder = decoders.entry(msg.publisher).or_default();
+            match decoder.decode(msg.seq, &msg.payload) {
                 Ok(frame) => {
                     let _ = events.send(Event::Video {
                         publisher: msg.publisher,
@@ -362,24 +346,29 @@ async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSen
     }
 }
 
-async fn send_video(connection: quinn::Connection, mut frames: mpsc::Receiver<EncodedFrame>) {
-    while let Some(f) = frames.recv().await {
-        let msg = VideoFrame {
-            publisher: 0,
-            rung: f.rung,
-            seq: f.seq,
-            payload: f.payload,
-        };
-        let result = async {
-            let mut stream = connection.open_uni().await?;
-            stream.write_all(&media::encode(&msg)).await?;
-            stream.finish()?;
-            anyhow::Ok(())
+/// Takes a frame only once the connection has room, so the one sent is the
+/// newest and the rest were folded into it.
+async fn send_video(connection: quinn::Connection, outbox: Outbox) {
+    let video = VideoSender::new(connection.clone());
+    let send = async {
+        loop {
+            outbox.filled().await;
+            video.ready().await;
+            let Some(f) = outbox.take() else { continue };
+            let frame = VideoFrame {
+                publisher: 0,
+                rung: f.rung,
+                seq: f.seq,
+                payload: f.payload,
+            };
+            if let Err(e) = video.send(&frame).await {
+                debug!("video send failed: {e}");
+            }
         }
-        .await;
-        if result.is_err() && connection.close_reason().is_some() {
-            break;
-        }
+    };
+    tokio::select! {
+        _ = connection.closed() => {}
+        () = send => {}
     }
 }
 

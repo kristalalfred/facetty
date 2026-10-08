@@ -12,7 +12,7 @@ mod codec;
 pub mod reel;
 
 pub use analysis::{Analyzer, Params};
-pub use codec::{DecodeError, Decoder, Encoder};
+pub use codec::{DecodeError, Decoder, Encoder, merge};
 
 pub const FILL_GLYPHS: usize = 10;
 

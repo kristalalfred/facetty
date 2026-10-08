@@ -6,6 +6,7 @@ use anyhow::Result;
 use crossterm::event::{
     Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent,
 };
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate};
 use facetty_ascii::Frame;
 use facetty_proto::ParticipantId;
 use facetty_proto::ladder::{self, Rung};
@@ -14,7 +15,7 @@ use futures_util::StreamExt;
 use ratatui::DefaultTerminal;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::camera;
 use crate::capture::Source;
@@ -33,6 +34,10 @@ const TOAST_TIME: Duration = Duration::from_secs(4);
 const MAX_TOASTS: usize = 4;
 const REACTION_TIME: Duration = Duration::from_secs(4);
 const MAX_REACTIONS: usize = 12;
+/// Animations redraw this often even when no video arrives.
+const TICK: Duration = Duration::from_millis(50);
+/// Video redraws as frames arrive, but no more often than this.
+const MIN_REDRAW: Duration = Duration::from_millis(16);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
@@ -61,7 +66,7 @@ pub struct App {
     room: String,
     me: Participant,
     others: BTreeMap<ParticipantId, Participant>,
-    frames: HashMap<ParticipantId, (u32, Arc<Frame>)>,
+    frames: HashMap<ParticipantId, Arc<Frame>>,
     subscriptions: HashMap<ParticipantId, Option<Rung>>,
     last_spoke: HashMap<ParticipantId, Instant>,
     reactions: HashMap<ParticipantId, Vec<Reaction>>,
@@ -144,28 +149,55 @@ impl App {
         mut events: Option<mpsc::UnboundedReceiver<Event>>,
     ) -> Result<Option<String>> {
         let mut input = EventStream::new();
-        let mut tick = tokio::time::interval(Duration::from_millis(50));
+        let mut self_view = Some(self.publisher.self_frames());
+        let mut tick = tokio::time::interval(TICK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut dirty = true;
+        let mut drawn_at = Instant::now();
         while !self.quit {
+            let redraw_at = dirty.then_some(drawn_at + MIN_REDRAW);
             tokio::select! {
-                term = input.next() => match term {
-                    Some(Ok(TermEvent::Key(key))) if key.kind != KeyEventKind::Release => self.on_key(key),
-                    Some(Ok(TermEvent::Mouse(mouse))) => self.on_mouse(mouse),
-                    Some(Ok(TermEvent::Paste(text))) => self.on_paste(&text),
-                    Some(Ok(_)) => {}
-                    Some(Err(e)) => return Err(e.into()),
-                    None => break,
-                },
-                event = recv(&mut events) => match event {
-                    Some(event) => self.on_event(event),
-                    None => events = None,
-                },
-                _ = tick.tick() => {
-                    terminal.draw(|f| self.draw(f.area(), f.buffer_mut()))?;
+                biased;
+                () = sleep_until(redraw_at) => {
+                    self.present(terminal)?;
+                    dirty = false;
+                    drawn_at = Instant::now();
                 }
+                term = input.next() => {
+                    match term {
+                        Some(Ok(TermEvent::Key(key))) if key.kind != KeyEventKind::Release => self.on_key(key),
+                        Some(Ok(TermEvent::Mouse(mouse))) => self.on_mouse(mouse),
+                        Some(Ok(TermEvent::Paste(text))) => self.on_paste(&text),
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => return Err(e.into()),
+                        None => break,
+                    }
+                    dirty = true;
+                }
+                event = recv(&mut events) => {
+                    match event {
+                        Some(event) => self.on_event(event),
+                        None => events = None,
+                    }
+                    dirty = true;
+                }
+                changed = changed(&mut self_view) => {
+                    if changed.is_err() {
+                        self_view = None;
+                    }
+                    dirty = true;
+                }
+                _ = tick.tick() => dirty = true,
             }
         }
         Ok(self.closed)
+    }
+
+    fn present(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        crossterm::queue!(terminal.backend_mut(), BeginSynchronizedUpdate)?;
+        terminal.draw(|f| self.draw(f.area(), f.buffer_mut()))?;
+        crossterm::execute!(terminal.backend_mut(), EndSynchronizedUpdate)?;
+        Ok(())
     }
 
     fn on_event(&mut self, event: Event) {
@@ -212,16 +244,10 @@ impl App {
                 }
             }
             Event::Video {
-                publisher,
-                seq,
-                frame,
+                publisher, frame, ..
             } => {
-                let newer = self
-                    .frames
-                    .get(&publisher)
-                    .is_none_or(|(last, _)| (seq.wrapping_sub(*last) as i32) > 0);
-                if newer && self.others.get(&publisher).is_some_and(|p| !p.video_off) {
-                    self.frames.insert(publisher, (seq, frame));
+                if self.others.get(&publisher).is_some_and(|p| !p.video_off) {
+                    self.frames.insert(publisher, frame);
                 }
             }
             Event::EncodeRungs(rungs) => self.publisher.set_rungs(rungs),
@@ -600,7 +626,7 @@ impl App {
         };
         Tile {
             name: &p.name,
-            frame: self.frames.get(&id).map(|(_, f)| f.as_ref()),
+            frame: self.frames.get(&id).map(|f| f.as_ref()),
             mirror: false,
             muted: p.audio_muted,
             speaking,
@@ -724,6 +750,20 @@ fn reaction_for(key: char) -> Option<&'static str> {
 async fn recv(events: &mut Option<mpsc::UnboundedReceiver<Event>>) -> Option<Event> {
     match events {
         Some(rx) => rx.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn changed<T>(rx: &mut Option<watch::Receiver<T>>) -> Result<(), watch::error::RecvError> {
+    match rx {
+        Some(rx) => rx.changed().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn sleep_until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
         None => std::future::pending().await,
     }
 }

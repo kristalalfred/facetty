@@ -17,7 +17,7 @@ use tracing::info;
 use facetty::app::{App, Setup};
 use facetty::camera;
 use facetty::capture::Source;
-use facetty::publisher::Publisher;
+use facetty::publisher::{Outbox, Publisher};
 use facetty::session::{self, Event};
 use facetty::splash;
 
@@ -162,8 +162,8 @@ async fn join(
     intro: bool,
 ) -> Result<()> {
     let name = conn.name.unwrap_or_else(default_name);
-    let (video_tx, video_rx) = mpsc::channel(4);
-    let connect = session::connect(&conn.server, &room, &name, video_rx);
+    let outbox = Outbox::default();
+    let connect = session::connect(&conn.server, &room, &name, outbox.clone());
     let mut terminal;
     let session = if intro {
         terminal = init_terminal();
@@ -181,7 +181,7 @@ async fn join(
         terminal = init_terminal();
         session
     };
-    let publisher = Publisher::start(Source::parse(&video.video), video.fps, video_tx, video_on);
+    let publisher = Publisher::start(Source::parse(&video.video), video.fps, outbox, video_on);
 
     let (engine, notice) = match &audio {
         None => (None, None),
@@ -251,8 +251,12 @@ fn release_mouse_and_paste() {
 }
 
 async fn preview(video: VideoArgs) -> Result<()> {
-    let (video_tx, _video_rx) = mpsc::channel(1);
-    let publisher = Publisher::start(Source::parse(&video.video), video.fps, video_tx, true);
+    let publisher = Publisher::start(
+        Source::parse(&video.video),
+        video.fps,
+        Outbox::default(),
+        true,
+    );
     let app = App::new(Setup {
         room: "preview".into(),
         me: Participant {
@@ -277,15 +281,15 @@ async fn preview(video: VideoArgs) -> Result<()> {
 
 async fn bot(room: String, conn: ConnArgs, video: VideoArgs, audio: Option<String>) -> Result<()> {
     let name = conn.name.unwrap_or_else(|| "bot".into());
-    let (video_tx, video_rx) = mpsc::channel(4);
-    let mut session = session::connect(&conn.server, &room, &name, video_rx).await?;
+    let outbox = Outbox::default();
+    let mut session = session::connect(&conn.server, &room, &name, outbox.clone()).await?;
     info!(
         room,
         id = session.me.id,
         others = session.participants.len(),
         "joined"
     );
-    let publisher = Publisher::start(Source::parse(&video.video), video.fps, video_tx, true);
+    let publisher = Publisher::start(Source::parse(&video.video), video.fps, outbox, true);
 
     let mut pcm = None;
     let input = match audio.as_deref() {
