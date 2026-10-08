@@ -3,6 +3,9 @@ name = "facetty-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Server for facetty calls"
 
 [dependencies]
 anyhow = "1.0.104"
@@ -16,3 +19,6 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 tokio = { version = "1.53.2", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[package.metadata.dist]
+dist = false

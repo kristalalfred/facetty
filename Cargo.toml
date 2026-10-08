@@ -6,6 +6,8 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/KristalAlfred/facetty"
+homepage = "https://github.com/KristalAlfred/facetty"
 
 [profile.dev]
 opt-level = 1
@@ -15,3 +17,7 @@ opt-level = 2
 
 [profile.dev.package.facetty-ascii]
 opt-level = 3
+
+[profile.dist]
+inherits = "release"
+lto = "thin"

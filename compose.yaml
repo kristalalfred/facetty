@@ -1,0 +1,10 @@
+services:
+  facetty:
+    image: ghcr.io/kristalalfred/facetty-server:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      FACETTY_HOST_KEY: ${FACETTY_HOST_KEY:?set FACETTY_HOST_KEY, for example from openssl rand -hex 32}
+    ports:
+      - "8740:8740/tcp"
+      - "8741:8741/udp"

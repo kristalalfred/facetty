@@ -2,42 +2,90 @@
 
 Terminal video calls with colored ASCII video and audio.
 
-## Try it
-
-Requires Rust and `just`. On Linux, building also needs `libasound2-dev`,
-`libclang-dev`, and `pkg-config` (Debian and Ubuntu package names).
+## Install the client
 
 ```sh
-just server        # terminal 1
-just create --host-key <key-printed-by-server>  # terminal 2
-just join <code>
+brew install kristalalfred/tap/facetty
 ```
 
-`just preview` checks your camera without joining a call. To add a test
-participant, run `just bot <code> --video test --audio tone` in another terminal.
-
-On macOS, allow camera, microphone, and local-network access when prompted.
-Use headphones; there is no echo cancellation.
-
-## Share a call on your network
+Without Homebrew, on macOS or Linux:
 
 ```sh
-just share
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/KristalAlfred/facetty/releases/latest/download/facetty-installer.sh | sh
 ```
 
-Builds release binaries, starts the server with a random host key, creates a
-call, and prints join commands. Guests need the `facetty` client.
-`just share 8750` uses ports 8750/8751.
+On Windows, in PowerShell:
 
-`facetty devices` lists devices and their selection flags; `--video camera:<index>`
-also takes part of a camera's name. `--video` also accepts `test`, and with
-`ffmpeg` installed, a file (looped) or a URL.
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/KristalAlfred/facetty/releases/latest/download/facetty-installer.ps1 | iex"
+```
+
+Archives for each platform are on the [releases page][releases]. On Linux the
+client needs ALSA (`libasound2`).
+
+Join a call with the code and server URL the host gave you:
+
+```sh
+facetty join <code> --server https://calls.example.com
+```
+
+Set `FACETTY_SERVER` to leave out `--server`. On macOS, allow camera,
+microphone, and local-network access when prompted. Use headphones; there is no
+echo cancellation.
+
+`facetty preview` checks your camera without joining a call. `facetty devices`
+lists devices and their selection flags; `--video camera:<index>` also takes
+part of a camera's name. `--video` also accepts `test`, and with `ffmpeg`
+installed, a file (looped) or a URL.
+
+## Host a server
+
+```sh
+docker run -d --name facetty --restart unless-stopped \
+  -e FACETTY_HOST_KEY="$(openssl rand -hex 32)" \
+  -p 8740:8740 -p 8741:8741/udp \
+  ghcr.io/kristalalfred/facetty-server
+```
+
+Or, with this repository's `compose.yaml`:
+
+```sh
+FACETTY_HOST_KEY="$(openssl rand -hex 32)" docker compose up -d
+```
+
+Open TCP 8740 and UDP 8741. Keep the host key; you need it to create calls:
+
+```sh
+facetty create --host-key <host-key> --server http://<host>:8740
+```
+
+This prints a call code for guests to use with `facetty join`.
+
+Outside a trusted LAN, put TCP 8740 behind a TLS proxy so host keys and call
+codes are encrypted, and give guests the `https://` URL. With Caddy:
+
+```
+calls.example.com {
+    reverse_proxy 127.0.0.1:8740
+}
+```
+
+The proxy must pass the `Host` header through, as Caddy does by default:
+clients find the media port on the host they used to reach the server. Media
+uses QUIC over UDP and does not go through the proxy.
+
+| Setting | Environment variable | Default |
+|---|---|---|
+| HTTP listener | `FACETTY_LISTEN` | `0.0.0.0:8740` (TCP) |
+| Media listener | `FACETTY_MEDIA_LISTEN` | `0.0.0.0:8741` (UDP) |
+| Media address for clients | `FACETTY_MEDIA_ADDR` | Server host with the media listener's port |
+| Key for creating calls | `FACETTY_HOST_KEY` | Generated and printed at startup |
+
+`FACETTY_MEDIA_ADDR` takes `host:port`, or `:port` to keep the host clients
+used. Set it when clients reach UDP on a different port than the server listens
+on, for example through a port mapping.
 
 ## Call permissions
-
-`facetty create --host-key <host-key> --server <url>` prints a random call code.
-Share it with guests, who run `facetty join <code> --server <url>`. The host key
-can also come from `FACETTY_HOST_KEY`.
 
 Create more calls with the same host key and server URL. Each code admits guests
 only to its own call; room names cannot create or join calls. Chat, participant
@@ -48,32 +96,36 @@ Already connected participants can continue after expiry. Restarting the
 server clears all codes. Anyone with a code can join that call; keep the host
 key private.
 
-## Hosting
-
-`facetty-server` serves call codes, rosters and chat over HTTP and WebSocket, and
-forwards video and audio over QUIC. Set `FACETTY_HOST_KEY`, for example from
-`openssl rand -hex 32`, to keep the host key across restarts; otherwise the
-server generates and prints a new key at startup.
-
-| Setting | Environment variable | Default |
-|---|---|---|
-| HTTP listener | `FACETTY_LISTEN` | `0.0.0.0:8740` (TCP) |
-| Media listener | `FACETTY_MEDIA_LISTEN` | `0.0.0.0:8741` (UDP) |
-| Media address for clients | `FACETTY_MEDIA_ADDR` | Server host with the media listener's port |
-| Key for creating calls | `FACETTY_HOST_KEY` | Generated at startup |
-| Client's server URL | `FACETTY_SERVER` | `http://127.0.0.1:8740` |
-
-Outside a trusted LAN, put the HTTP listener behind a TLS proxy and use an
-`https://` client URL to protect host keys and call codes. Media uses QUIC over
-UDP.
-
 ## Development
+
+Requires Rust and `just`. On Linux, building also needs `libasound2-dev`,
+`libclang-dev`, and `pkg-config` (Debian and Ubuntu package names).
+
+```sh
+just server        # terminal 1
+just create --host-key <key-printed-by-server>  # terminal 2
+just join <code>
+```
+
+To add a test participant, run `just bot <code> --video test --audio tone` in
+another terminal. `just share` builds release binaries, starts the server with a
+random host key, creates a call, and prints join commands for your network;
+`just share 8750` uses ports 8750/8751.
 
 `just build`, `just test`, and `just lint` build and check the workspace.
 
-`facetty-signal` manages rooms and chat over WebSocket; `facetty-sfu` forwards video
-and Opus audio over QUIC; `facetty-server` runs both in one process. The ASCII encoder is a CPU port of
-[Acerola's ASCII shader][AcerolaFX_ASCII.fx].
+`facetty-signal` manages rooms and chat over WebSocket; `facetty-sfu` forwards
+video and Opus audio over QUIC; `facetty-server` runs both in one process. The
+ASCII encoder is a CPU port of [Acerola's ASCII shader][AcerolaFX_ASCII.fx].
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, commit, and push a tag such as `v0.2.0`. The
+Release workflow, generated by [dist], builds the client archives and
+installers, publishes a GitHub release, and pushes the Homebrew formula to
+`KristalAlfred/homebrew-tap` using the `HOMEBREW_TAP_TOKEN` secret. The Docker
+workflow pushes the server image to `ghcr.io/kristalalfred/facetty-server`.
+After changing `dist-workspace.toml`, run `dist generate`.
 
 ## Limits
 
@@ -82,4 +134,6 @@ and Opus audio over QUIC; `facetty-server` runs both in one process. The ASCII e
 - Microphone capture is untested.
 - A server restart ends calls and clears call codes.
 
+[releases]: https://github.com/KristalAlfred/facetty/releases
+[dist]: https://github.com/axodotdev/cargo-dist
 [AcerolaFX_ASCII.fx]: https://github.com/GarrettGunnell/AcerolaFX/blob/main/Shaders/AcerolaFX_ASCII.fx

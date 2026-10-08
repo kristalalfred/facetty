@@ -3,6 +3,9 @@ name = "facetty"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Video calls in your terminal, drawn in ASCII"
 
 [dependencies]
 anyhow = "1.0.104"
