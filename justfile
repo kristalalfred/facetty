@@ -43,6 +43,30 @@ share port="8740":
     echo
     wait
 
+# Join a local call on the intro, with a guest showing test, camera:<n>, or a video file.
+demo guest="test" *args="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -q --release -p facetty -p facetty-server
+    export FACETTY_SERVER=http://127.0.0.1:8750
+    if curl -fsS "$FACETTY_SERVER/healthz" >/dev/null 2>&1; then
+        echo "port 8750 is in use" >&2
+        exit 1
+    fi
+    trap 'kill $(jobs -p) 2>/dev/null' EXIT
+    FACETTY_OPEN=true FACETTY_LISTEN=127.0.0.1:8750 FACETTY_MEDIA_LISTEN=127.0.0.1:8751 \
+        ./target/release/facetty-server >/dev/null 2>&1 &
+    server=$!
+    until curl -fsS "$FACETTY_SERVER/healthz" >/dev/null 2>&1; do
+        kill -0 $server 2>/dev/null || { echo "server failed to start" >&2; exit 1; }
+        sleep 0.1
+    done
+    code=$(./target/release/facetty create)
+    audio=""
+    if [[ -f "{{guest}}" ]]; then audio="{{guest}}"; fi
+    FACETTY_NAME=guest ./target/release/facetty bot "$code" --video "{{guest}}" ${audio:+--audio "$audio"} >/dev/null 2>&1 &
+    ./target/release/facetty join "$code" --intro {{args}}
+
 create *args="":
     cargo run -q -p facetty -- create {{args}}
 
