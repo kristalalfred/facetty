@@ -92,7 +92,7 @@ pub fn decode_fitting(data: &[u8], cols: u16, rows: u16) -> Result<Option<Reel>,
     }
     let mut offset = MAGIC.len() + 2 + count * HEADER;
     let mut best: Option<(usize, [u16; 5], usize, usize)> = None;
-    for h in headers[..count * HEADER].chunks_exact(HEADER) {
+    for h in headers[..count * HEADER].as_chunks::<HEADER>().0 {
         let v: [u16; 5] = std::array::from_fn(|i| u16::from_le_bytes([h[2 * i], h[2 * i + 1]]));
         let len = u32::from_le_bytes([h[10], h[11], h[12], h[13]]) as usize;
         let cells = v[0] as usize * v[1] as usize;

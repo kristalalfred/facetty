@@ -148,12 +148,16 @@ fn load(png: &Path, bloom: &Bloom) -> (Image, Geometry) {
         width: w,
         height: h,
         depth: depth
-            .chunks_exact(2)
-            .map(|b| u16::from_le_bytes([b[0], b[1]]) as f32 / 65535.0 * far)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&b| u16::from_le_bytes(b) as f32 / 65535.0 * far)
             .collect(),
         normal: normal
-            .chunks_exact(3)
-            .map(|b| [b[0], b[1], b[2]].map(|v| v as i8 as f32 / 127.0))
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .map(|b| b.map(|v| v as i8 as f32 / 127.0))
             .collect(),
     };
     (Image::new(w, h, rgb), geometry)
@@ -164,8 +168,10 @@ fn glow(rgb: Vec<u8>, w: usize, h: usize, bloom: &Bloom) -> Vec<u8> {
         return rgb;
     }
     let base: Vec<[f32; 3]> = rgb
-        .chunks_exact(3)
-        .map(|p| [p[0], p[1], p[2]].map(|v| v as f32 / 255.0))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|p| p.map(|v| v as f32 / 255.0))
         .collect();
     let mut bright: Vec<[f32; 3]> = base
         .iter()
