@@ -2,34 +2,15 @@
 
 Terminal video calls with colored ASCII video and audio.
 
-## Join a call
+## Install
+
+With Homebrew on macOS or Linux:
 
 ```sh
 brew install kristalalfred/tap/facetty
-facetty join <code> --server <server-url>
 ```
 
-The host gives you the code and the server URL. Without Homebrew, see
-[other installers](#other-installers).
-
-## Host calls
-
-On a machine with Docker, open TCP 8740 and UDP 8741, then run:
-
-```sh
-docker run -d --name facetty --restart unless-stopped \
-  -p 8740:8740 -p 8741:8741/udp -e FACETTY_HOST_KEY=<secret> \
-  ghcr.io/kristalalfred/facetty-server
-facetty create --host-key <secret> --server http://<host>:8740
-```
-
-`<secret>` is any long random string, for example from `openssl rand -hex 32`.
-`create` prints a call code; give guests the code and `http://<host>:8740`.
-Outside a trusted LAN, [add TLS](#tls).
-
-## Other installers
-
-macOS or Linux:
+Without Homebrew on macOS or Linux:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/KristalAlfred/facetty/releases/latest/download/facetty-installer.sh | sh
@@ -44,6 +25,44 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/KristalAlfred/face
 Archives for each platform are on the [releases page][releases]. On Linux the
 client needs ALSA (`libasound2`).
 
+`facetty preview` shows your camera in ASCII without a server or a call.
+
+## Join a call
+
+```sh
+facetty join <code> --server <server-url>
+```
+
+The host gives you the code and the server URL.
+
+## Host calls
+
+The server is `facetty-server`. Guests must reach it on TCP 8740 and UDP 8741.
+
+```sh
+brew install kristalalfred/tap/facetty-server
+FACETTY_HOST_KEY=<secret> facetty-server
+facetty create --host-key <secret> --server http://<host>:8740
+```
+
+Without Homebrew on macOS or Linux:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/KristalAlfred/facetty/releases/latest/download/facetty-server-installer.sh | sh
+```
+
+With Docker:
+
+```sh
+docker run -d --name facetty --restart unless-stopped \
+  -p 8740:8740 -p 8741:8741/udp -e FACETTY_HOST_KEY=<secret> \
+  ghcr.io/kristalalfred/facetty-server
+```
+
+`<secret>` is any long random string, for example from `openssl rand -hex 32`.
+`create` prints a call code; give guests the code and `http://<host>:8740`.
+Outside a trusted LAN, [add TLS](#tls).
+
 ## Client
 
 Upgrade with `brew upgrade kristalalfred/tap/facetty`. Homebrew refuses the
@@ -55,15 +74,15 @@ microphone, and local-network access when prompted. Use headphones; there is no
 echo cancellation. For demos, `join --intro` (or `FACETTY_INTRO=1`) opens on an
 intro animation; press Enter to join.
 
-`facetty preview` checks your camera without joining a call. Press `d` in a
-call or preview to switch camera, microphone, or speaker. `facetty devices`
-lists devices and their selection flags; `--video camera:<index>` also takes
-part of a camera's name. `--video` also accepts `test`, and with `ffmpeg`
-installed, a file (looped) or a URL.
+Press `d` in a call or preview to switch camera, microphone, or speaker.
+`facetty devices` lists devices and their selection flags; `--video
+camera:<index>` also takes part of a camera's name. `--video` also accepts
+`test`, and with `ffmpeg` installed, a file (looped) or a URL.
 
 ## Server
 
-`compose.yaml` in this repository runs the same container:
+`compose.yaml` in this repository runs the server container and passes
+`FACETTY_HOST_KEY`, `FACETTY_OPEN`, and `FACETTY_MAX_CALLS` through:
 `FACETTY_HOST_KEY=<secret> docker compose up -d`.
 
 | Setting | Environment variable | Default |
@@ -82,7 +101,16 @@ on, for example through a port mapping.
 ### TLS
 
 Put TCP 8740 behind a TLS proxy so host keys and call codes are encrypted, and
-give guests the `https://` URL. With Caddy:
+give guests the `https://` URL.
+
+The `tls` profile in `compose.yaml` adds Caddy, which gets a certificate for
+`FACETTY_DOMAIN` and needs TCP 80 and 443 open:
+
+```sh
+FACETTY_DOMAIN=calls.example.com FACETTY_HOST_KEY=<secret> docker compose --profile tls up -d
+```
+
+Guests then use `https://calls.example.com`. With Caddy installed separately:
 
 ```
 calls.example.com {
@@ -125,6 +153,11 @@ another terminal. `just share` builds release binaries, starts the server with a
 random host key, creates a call, and prints join commands for your network;
 `just share 8750` uses ports 8750/8751.
 
+`just demo [guest]` starts a local server on ports 8750/8751, adds a guest, and
+joins you through the intro. The guest shows `test` (the default),
+`camera:<index or name>`, or a video file with its audio. Later arguments go to
+`facetty join`, for example `just demo test --no-audio`.
+
 `just build`, `just test`, and `just lint` build and check the workspace.
 
 `facetty-signal` manages rooms and chat over WebSocket; `facetty-sfu` forwards
@@ -141,9 +174,9 @@ is not in `/Applications`) and the Arial Black font that macOS ships.
 ## Releasing
 
 Bump `version` in `Cargo.toml`, commit, and push a tag such as `v0.2.0`. The
-Release workflow, generated by [dist], builds the client archives and
-installers, publishes a GitHub release, and pushes the Homebrew formula to
-`KristalAlfred/homebrew-tap`. The Docker workflow pushes the server image to
+Release workflow, generated by [dist], builds the client and server archives
+and installers, publishes a GitHub release, and pushes the `facetty` and
+`facetty-server` Homebrew formulas to `KristalAlfred/homebrew-tap`. The Docker workflow pushes the server image to
 `ghcr.io/kristalalfred/facetty-server`.
 
 `release.yml` differs from what `dist generate` writes in one line: the tap
