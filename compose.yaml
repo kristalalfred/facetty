@@ -4,7 +4,25 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      FACETTY_HOST_KEY: ${FACETTY_HOST_KEY:?set FACETTY_HOST_KEY, for example from openssl rand -hex 32}
+      - FACETTY_HOST_KEY
+      - FACETTY_OPEN
+      - FACETTY_MAX_CALLS
     ports:
       - "8740:8740/tcp"
       - "8741:8741/udp"
+
+  tls:
+    profiles: [tls]
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      - FACETTY_DOMAIN
+    entrypoint: ["sh", "-c", 'exec caddy reverse-proxy --from "$${FACETTY_DOMAIN:?set FACETTY_DOMAIN to the DNS name of this server}" --to facetty:8740']
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - caddy:/data
+
+volumes:
+  caddy:
