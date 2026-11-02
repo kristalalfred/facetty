@@ -5,6 +5,7 @@ use facetty_proto::ladder::{self, Rung};
 pub const CELL_WIDTH: f64 = 8.0;
 const MARGIN: f64 = 24.0;
 const GAP: f64 = 16.0;
+const STRIP_MIN: f64 = 90.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -15,19 +16,60 @@ pub struct Rect {
 }
 
 pub fn grid(area: Rect, n: usize) -> Vec<Rect> {
+    let inner = inset(area);
+    let cols = (1..=n)
+        .max_by(|&a, &b| {
+            tile_width(inner, n, a)
+                .total_cmp(&tile_width(inner, n, b))
+                .then(b.cmp(&a))
+        })
+        .unwrap_or(1);
+    pack(inner, n, cols)
+}
+
+/// Claude: one big tile, with everyone else in a strip below it.
+pub fn speaker(area: Rect, n: usize) -> Vec<Rect> {
+    if n <= 1 {
+        return grid(area, n);
+    }
+    let inner = inset(area);
+    let strip_h = (inner.h / 4.0).max(STRIP_MIN.min(inner.h / 2.0));
+    let main = Rect {
+        h: (inner.h - strip_h - GAP).max(0.0),
+        ..inner
+    };
+    let strip = Rect {
+        y: inner.y + main.h + GAP,
+        h: strip_h,
+        ..inner
+    };
+    let mut tiles = pack(main, 1, 1);
+    tiles.extend(pack(strip, n - 1, n - 1));
+    tiles
+}
+
+fn inset(area: Rect) -> Rect {
+    Rect {
+        x: area.x + MARGIN,
+        y: area.y + MARGIN,
+        w: (area.w - 2.0 * MARGIN).max(0.0),
+        h: (area.h - 2.0 * MARGIN).max(0.0),
+    }
+}
+
+fn tile_width(area: Rect, n: usize, cols: usize) -> f64 {
+    let rows = n.div_ceil(cols);
+    let by_width = (area.w - GAP * (cols - 1) as f64) / cols as f64;
+    let by_height = (area.h - GAP * (rows - 1) as f64) / rows as f64 * 16.0 / 9.0;
+    by_width.min(by_height).max(0.0)
+}
+
+/// Claude: `n` 16:9 tiles in rows of `cols`, as large as fit, centered.
+fn pack(area: Rect, n: usize, cols: usize) -> Vec<Rect> {
     if n == 0 {
         return Vec::new();
     }
-    let area_w = (area.w - 2.0 * MARGIN).max(0.0);
-    let area_h = (area.h - 2.0 * MARGIN).max(0.0);
-    let (cols, tile_w) = (1..=n)
-        .map(|cols| {
-            let rows = n.div_ceil(cols);
-            let by_width = (area_w - GAP * (cols - 1) as f64) / cols as f64;
-            let by_height = (area_h - GAP * (rows - 1) as f64) / rows as f64 * 16.0 / 9.0;
-            (cols, by_width.min(by_height).max(0.0))
-        })
-        .fold((1, -1.0), |best, c| if c.1 > best.1 { c } else { best });
+    let tile_w = tile_width(area, n, cols);
     let tile_h = tile_w * 9.0 / 16.0;
     let rows = n.div_ceil(cols);
     let top = area.y + (area.h - (rows as f64 * tile_h + GAP * (rows - 1) as f64)) / 2.0;
@@ -82,6 +124,43 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn speaker_view_puts_one_big_tile_above_a_strip() {
+        for (w, h) in [(1920.0, 1080.0), (390.0, 700.0)] {
+            for n in 2..=6 {
+                let tiles = speaker(area(w, h), n);
+                assert_eq!(tiles.len(), n);
+                let (main, strip) = tiles.split_first().unwrap();
+                for (i, a) in tiles.iter().enumerate() {
+                    assert!(a.x >= 0.0 && a.y >= 0.0 && a.x + a.w <= w && a.y + a.h <= h);
+                    for b in &tiles[i + 1..] {
+                        assert!(!overlaps(a, b), "{n} tiles in {w}x{h}: {a:?} and {b:?}");
+                    }
+                }
+                for small in strip {
+                    assert!(small.y > main.y + main.h);
+                    assert!(small.w < main.w);
+                    assert_eq!(small.y, strip[0].y);
+                }
+            }
+        }
+        assert_eq!(speaker(area(800.0, 600.0), 1), grid(area(800.0, 600.0), 1));
+    }
+
+    #[test]
+    fn tiles_stay_inside_an_offset_area() {
+        let shifted = Rect {
+            x: 100.0,
+            y: 50.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        for tile in grid(shifted, 3).iter().chain(&speaker(shifted, 3)) {
+            assert!(tile.x >= shifted.x && tile.x + tile.w <= shifted.x + shifted.w);
+            assert!(tile.y >= shifted.y && tile.y + tile.h <= shifted.y + shifted.h);
         }
     }
 

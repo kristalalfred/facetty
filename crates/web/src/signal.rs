@@ -39,28 +39,31 @@ impl Signal {
     }
 }
 
-pub async fn connect(
-    code: &str,
-    name: Option<&str>,
-) -> Result<(Welcome, Signal, mpsc::UnboundedReceiver<ServerEvent>)> {
-    let location = window().location();
-    let origin = location.origin().map_err(js)?;
+pub const INVALID_CODE: &str = "invalid or expired call code";
+
+pub async fn exists(code: &str) -> Result<bool> {
     let response: Response = JsFuture::from(window().fetch_with_str(&format!("/rooms/{code}")))
         .await
         .map_err(js)?
         .unchecked_into();
-    if response.status() == 404 {
-        bail!("invalid or expired call code");
+    Ok(response.status() != 404)
+}
+
+pub async fn connect(
+    code: &str,
+    name: &str,
+) -> Result<(Welcome, Signal, mpsc::UnboundedReceiver<ServerEvent>)> {
+    if !exists(code).await? {
+        bail!(INVALID_CODE);
     }
+    let origin = window().location().origin().map_err(js)?;
 
     let mut url = url::Url::parse(&origin)?;
     let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
     url.set_scheme(scheme)
         .map_err(|()| anyhow!("cannot reach the server over a WebSocket"))?;
     url.set_path(&format!("/rooms/{code}/ws"));
-    if let Some(name) = name {
-        url.query_pairs_mut().append_pair("name", name);
-    }
+    url.query_pairs_mut().append_pair("name", name);
     let socket = WebSocket::new(url.as_str()).map_err(js)?;
 
     let (tx, mut events) = mpsc::unbounded();

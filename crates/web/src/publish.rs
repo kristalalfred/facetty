@@ -44,6 +44,16 @@ impl Publisher {
         self.refresh.push(rung);
     }
 
+    pub fn params(&self) -> Params {
+        *self.analyzer.params()
+    }
+
+    pub fn update_params(&mut self, f: impl FnOnce(&mut Params)) {
+        let mut params = self.params();
+        f(&mut params);
+        self.analyzer.set_params(params);
+    }
+
     pub fn publish(&mut self, image: &Image, self_view: Option<(u16, u16)>) -> Option<Frame> {
         self.analyzer.analyze(image);
         let refresh = std::mem::take(&mut self.refresh);

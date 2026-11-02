@@ -40,8 +40,18 @@ uniform sampler2DArray u_glyphs;
 uniform vec2 u_grid;
 uniform bool u_mirror;
 uniform vec3 u_background;
+uniform int u_palette;
 in vec2 v_uv;
 out vec4 color;
+vec3 tint(vec3 c) {
+    if (u_palette == 1) {
+        float top = max(c.r, max(c.g, c.b));
+        return top < 12.0 / 255.0 ? vec3(90.0 / 255.0) : c / top;
+    }
+    if (u_palette == 2) return vec3(230.0 / 255.0);
+    if (u_palette == 3) return vec3(40.0, 255.0, 90.0) / 255.0;
+    return c;
+}
 void main() {
     vec2 p = v_uv * u_grid;
     ivec2 grid = ivec2(u_grid);
@@ -51,9 +61,41 @@ void main() {
     float glyph = floor(c.a * 255.0 + 0.5);
     if (u_mirror && (glyph == RISING || glyph == FALLING)) glyph = RISING + FALLING - glyph;
     float cover = textureGrad(u_glyphs, vec3(fract(p), glyph), dFdx(p), dFdy(p)).r;
-    color = vec4(mix(u_background, c.rgb, cover), 1.0);
+    color = vec4(mix(u_background, tint(c.rgb), cover), 1.0);
 }
 "#;
+
+/// Claude: the native client's palettes, applied as cells are drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Palette {
+    Natural,
+    Vivid,
+    Mono,
+    Matrix,
+}
+
+impl Palette {
+    pub const ALL: [Palette; 4] = [
+        Palette::Natural,
+        Palette::Vivid,
+        Palette::Mono,
+        Palette::Matrix,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Palette::Natural => "natural",
+            Palette::Vivid => "vivid",
+            Palette::Mono => "mono",
+            Palette::Matrix => "matrix",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|p| *p == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
 
 pub struct Tile<'a> {
     pub id: u32,
@@ -86,6 +128,7 @@ struct Uniforms {
     canvas: Option<WebGlUniformLocation>,
     grid: Option<WebGlUniformLocation>,
     mirror: Option<WebGlUniformLocation>,
+    palette: Option<WebGlUniformLocation>,
 }
 
 impl Renderer {
@@ -114,6 +157,7 @@ impl Renderer {
             canvas: uniform("u_canvas"),
             grid: uniform("u_grid"),
             mirror: uniform("u_mirror"),
+            palette: uniform("u_palette"),
         };
         gl.uniform1i(uniform("u_cells").as_ref(), 0);
         gl.uniform1i(uniform("u_glyphs").as_ref(), 1);
@@ -148,7 +192,7 @@ impl Renderer {
     }
 
     /// Claude: `rect`s are in CSS pixels; `scale` is the device pixel ratio.
-    pub fn draw(&mut self, tiles: &[Tile], scale: f64) -> Result<()> {
+    pub fn draw(&mut self, tiles: &[Tile], scale: f64, palette: Palette) -> Result<()> {
         let gl = &self.gl;
         let (w, h) = (self.canvas.width() as i32, self.canvas.height() as i32);
         gl.viewport(0, 0, w, h);
@@ -161,6 +205,8 @@ impl Renderer {
         gl.bind_texture(Gl::TEXTURE_2D_ARRAY, Some(&self.glyphs));
         gl.active_texture(Gl::TEXTURE0);
         gl.uniform2f(self.uniforms.canvas.as_ref(), w as f32, h as f32);
+        let palette = Palette::ALL.iter().position(|p| *p == palette).unwrap_or(0);
+        gl.uniform1i(self.uniforms.palette.as_ref(), palette as i32);
 
         self.cells.retain(|id, _| tiles.iter().any(|t| t.id == *id));
         for tile in tiles {
