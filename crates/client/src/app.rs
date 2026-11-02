@@ -64,6 +64,7 @@ struct Reaction {
 
 pub struct App {
     room: String,
+    link: Option<String>,
     me: Participant,
     others: BTreeMap<ParticipantId, Participant>,
     frames: HashMap<ParticipantId, Arc<Frame>>,
@@ -93,6 +94,7 @@ pub struct App {
 
 pub struct Setup {
     pub room: String,
+    pub link: Option<String>,
     pub me: Participant,
     pub others: Vec<Participant>,
     pub publisher: Publisher,
@@ -110,6 +112,7 @@ impl App {
         me.audio_muted |= setup.audio.is_none();
         let mut app = Self {
             room: setup.room,
+            link: setup.link,
             others: setup.others.into_iter().map(|p| (p.id, p)).collect(),
             frames: HashMap::new(),
             subscriptions: HashMap::new(),
@@ -321,6 +324,13 @@ impl App {
                 self.send_state();
             }
             KeyCode::Char('d') => self.open_picker(),
+            KeyCode::Char('c') if self.link.is_some() => {
+                let link = self.link.clone().unwrap_or_default();
+                match desktop::copy(&link) {
+                    Ok(()) => self.toast(Some("link"), format!("copied {link}")),
+                    Err(e) => self.notify(format!("copy failed: {e:#}")),
+                }
+            }
             KeyCode::Char('l') => {
                 self.view = match self.view {
                     View::Grid => View::Speaker,
@@ -678,6 +688,9 @@ impl App {
         };
         hints.push(("v", cam.to_string(), self.me.video_off));
         hints.push(("d", "devices".to_string(), false));
+        if self.link.is_some() {
+            hints.push(("c", "link".to_string(), false));
+        }
         let view = match self.view {
             View::Grid => "grid",
             View::Speaker => "speaker",

@@ -99,6 +99,20 @@ pub fn ws_url(server: &str, room: &str, name: &str) -> Result<url::Url> {
     Ok(url)
 }
 
+/// Claude: the call's page for browsers, which also names the server and
+/// code for terminal guests.
+pub fn call_link(server: &str, room: &str) -> Result<url::Url> {
+    let mut url = url::Url::parse(server).with_context(|| format!("bad server URL {server}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("call links need an http:// or https:// server URL");
+    }
+    url.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("server URL cannot have a path"))?
+        .pop_if_empty()
+        .push(room);
+    Ok(url)
+}
+
 /// `host_key` can be `None` on servers that let anyone create calls.
 pub async fn create_call(server: &str, host_key: Option<&str>) -> Result<CallInvite> {
     let mut url = url::Url::parse(server).with_context(|| format!("bad server URL {server}"))?;
@@ -476,6 +490,23 @@ impl ServerCertVerifier for PinnedCert {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_call_links() {
+        assert_eq!(
+            call_link("http://127.0.0.1:8750", "abcd-efgh")
+                .unwrap()
+                .as_str(),
+            "http://127.0.0.1:8750/abcd-efgh"
+        );
+        assert_eq!(
+            call_link("https://calls.example.com/", "x")
+                .unwrap()
+                .as_str(),
+            "https://calls.example.com/x"
+        );
+        assert!(call_link("ws://example.com", "x").is_err());
+    }
 
     #[test]
     fn builds_ws_urls() {

@@ -200,8 +200,12 @@ async fn join(
 
     let mut me = session.me.clone();
     me.video_off = !video_on;
+    let link = session::call_link(&conn.server, &room)
+        .ok()
+        .map(String::from);
     let app = App::new(Setup {
         room,
+        link,
         me,
         others: session.participants.clone(),
         publisher,
@@ -271,6 +275,7 @@ async fn preview(video: VideoArgs) -> Result<()> {
     );
     let app = App::new(Setup {
         room: "preview".into(),
+        link: None,
         me: Participant {
             id: 0,
             name: default_name(),
