@@ -1,3 +1,4 @@
+pub mod chat;
 pub mod ladder;
 pub mod media;
 #[cfg(feature = "quic")]
