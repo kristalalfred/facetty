@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0c0c0e">
+<title>facetty</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230c0c0e'/%3E%3Ctext x='16' y='23' font-family='Menlo,monospace' font-size='20' font-weight='700' fill='%23e8e8ea' text-anchor='middle'%3E@%3C/text%3E%3C/svg%3E">
+<style>
+  :root { --background: #0c0c0e; --text: rgba(232, 232, 234, 0.42); }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--background); }
+  body { position: relative; font: 15px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text); }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  .label, #message { position: absolute; display: flex; align-items: center; justify-content: center; letter-spacing: 0.02em; user-select: none; }
+  #message { inset: 0; padding: 0 24px; text-align: center; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="message" hidden></div>
+<script type="module">
+  import init from "/web/facetty_web.js";
+  init();
+</script>
+</body>
+</html>

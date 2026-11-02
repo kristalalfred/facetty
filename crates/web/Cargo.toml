@@ -1,0 +1,65 @@
+[package]
+name = "facetty-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+facetty-proto = { version = "0.2.2", path = "../proto", default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+anyhow = "1.0.104"
+facetty-ascii = { version = "0.2.2", path = "../ascii" }
+facetty-audio = { version = "0.2.2", path = "../audio", default-features = false }
+futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
+hex = "0.4.3"
+js-sys = "0.3.107"
+serde_json = "1.0.151"
+url = "2.5.8"
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4.80"
+web-transport-wasm = "0.8.7"
+web-sys = { version = "0.3.107", features = [
+    "AudioContext",
+    "AudioContextOptions",
+    "AudioContextState",
+    "AudioDestinationNode",
+    "AudioNode",
+    "AudioWorklet",
+    "AudioWorkletNode",
+    "AudioWorkletNodeOptions",
+    "BaseAudioContext",
+    "CanvasRenderingContext2d",
+    "CssStyleDeclaration",
+    "console",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlVideoElement",
+    "ImageData",
+    "Location",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamAudioSourceNode",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "MessageEvent",
+    "MessagePort",
+    "Navigator",
+    "Response",
+    "UrlSearchParams",
+    "WebGl2RenderingContext",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlTexture",
+    "WebGlUniformLocation",
+    "WebGlVertexArrayObject",
+    "WebSocket",
+    "WebTransportCongestionControl",
+    "Window",
+] }

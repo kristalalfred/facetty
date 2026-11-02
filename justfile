@@ -1,25 +1,34 @@
 default:
     @just --list
 
-build:
+build: web
     cargo build --workspace
+
+# Build the browser client that the server embeds.
+web out="crates/web/pkg":
+    rustup target add wasm32-unknown-unknown >/dev/null 2>&1
+    cargo build -q --release -p facetty-web --target wasm32-unknown-unknown
+    wasm-bindgen --target web --no-typescript --out-dir {{out}} target/wasm32-unknown-unknown/release/facetty_web.wasm
 
 test:
     cargo test --workspace
 
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy -p facetty-web --target wasm32-unknown-unknown -- -D warnings
     cargo fmt --all --check
+    just web target/web-check
+    diff -r target/web-check crates/web/pkg || (echo "crates/web/pkg is stale; run just web" >&2; exit 1)
 
 fmt:
     cargo fmt --all
 
 # Run the server; Ctrl-C stops it.
-server *args="":
+server *args="": web
     cargo run -q -p facetty-server -- {{args}}
 
 # Host a LAN call and print join commands.
-share port="8740":
+share port="8740": web
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build -q --release -p facetty -p facetty-server
@@ -39,12 +48,13 @@ share port="8740":
     echo
     echo "  others run:  facetty join $code --server http://$ip:{{port}}"
     echo "  you run:     ./target/release/facetty join $code --server http://127.0.0.1:{{port}}"
+    echo "  or open:     http://127.0.0.1:{{port}}/$code"
     echo "  more calls:  ./target/release/facetty create --host-key $FACETTY_HOST_KEY --server http://127.0.0.1:{{port}}"
     echo
     wait
 
 # Join a local call on the intro, with a guest showing test, camera:<n>, or a video file.
-demo guest="test" *args="":
+demo guest="test" *args="": web
     #!/usr/bin/env bash
     set -euo pipefail
     cargo build -q --release -p facetty -p facetty-server

@@ -1,6 +1,6 @@
 # facetty
 
-Terminal video calls with colored ASCII video and audio.
+Video calls with colored ASCII video and audio, in a terminal or a browser.
 
 ## Install
 
@@ -34,6 +34,10 @@ facetty join <code> --server <server-url>
 ```
 
 The host gives you the code and the server URL.
+
+To join from a browser, open `<server-url>/<code>`. Browsers allow the camera,
+microphone, and media connection only over `https://` or on the server's own
+machine (`localhost` or `127.0.0.1`).
 
 ## Host calls
 
@@ -101,7 +105,8 @@ on, for example through a port mapping.
 ### TLS
 
 Put TCP 8740 behind a TLS proxy so host keys and call codes are encrypted, and
-give guests the `https://` URL.
+give guests the `https://` URL. Browser guests need it to use their camera and
+microphone.
 
 The `tls` profile in `compose.yaml` adds Caddy, which gets a certificate for
 `FACETTY_DOMAIN` and needs TCP 80 and 443 open:
@@ -140,7 +145,9 @@ key private.
 ## Development
 
 Requires Rust and `just`. On Linux, building also needs `libasound2-dev`,
-`libclang-dev`, and `pkg-config` (Debian and Ubuntu package names).
+`libclang-dev`, and `pkg-config` (Debian and Ubuntu package names). `just build`
+and `just web` also need `wasm-bindgen-cli` at the version of `wasm-bindgen` in
+`Cargo.lock`.
 
 ```sh
 just server        # terminal 1
@@ -159,9 +166,13 @@ joins you through the intro. The guest shows `test` (the default),
 `facetty join`, for example `just demo test --no-audio`.
 
 `just build`, `just test`, and `just lint` build and check the workspace.
+`just web` builds the browser client into `crates/web/pkg`, which the server
+embeds; `just lint` fails when that build is out of date.
 
 `facetty-signal` manages rooms and chat over WebSocket; `facetty-sfu` forwards
-video and Opus audio over QUIC; `facetty-server` runs both in one process. The
+video and Opus audio over QUIC, directly from the terminal client and as
+WebTransport from browsers; `facetty-server` runs both in one process and
+serves `facetty-web`, the browser client. The
 ASCII encoder is a CPU port of [Acerola's ASCII shader][AcerolaFX_ASCII.fx]
 (MIT, see `LICENSE-AcerolaFX`).
 
@@ -196,6 +207,7 @@ MIT, see `LICENSE`.
   Windows (Media Foundation) cameras build but have not been tried.
 - Microphone capture is untested.
 - A server restart ends calls and clears call codes.
+- The browser client has only been run in Chrome.
 
 [releases]: https://github.com/KristalAlfred/facetty/releases
 [dist]: https://github.com/axodotdev/cargo-dist

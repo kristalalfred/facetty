@@ -359,7 +359,7 @@ async fn receive_video(connection: quinn::Connection, events: mpsc::UnboundedSen
 /// Takes a frame only once the connection has room, so the one sent is the
 /// newest and the rest were folded into it.
 async fn send_video(connection: quinn::Connection, outbox: Outbox) {
-    let video = VideoSender::new(connection.clone());
+    let video = VideoSender::new(web_transport_quinn::Session::raw(connection.clone()));
     let send = async {
         loop {
             outbox.filled().await;

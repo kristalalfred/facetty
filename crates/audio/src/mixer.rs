@@ -9,8 +9,8 @@ struct Remote {
     level: f32,
 }
 
-/// Every publisher's jitter buffer, mixed into one 20 ms frame at a time by
-/// whatever drives playback.
+/// Claude: every publisher's jitter buffer, mixed into one 20 ms frame at a
+/// time by whatever drives playback.
 pub struct Mix {
     remotes: HashMap<u32, Remote>,
     scratch: [f32; FRAME_SAMPLES],
@@ -62,7 +62,7 @@ impl Mix {
         }
     }
 
-    /// Each publisher's smoothed loudness, 0 to 1, as of the last mix.
+    /// Claude: each publisher's smoothed loudness, 0 to 1, as of the last mix.
     pub fn levels(&self) -> impl Iterator<Item = (u32, f32)> + '_ {
         self.remotes.iter().map(|(&id, r)| (id, r.level))
     }

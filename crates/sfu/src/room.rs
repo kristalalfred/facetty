@@ -7,10 +7,10 @@ use facetty_proto::ParticipantId;
 use facetty_proto::ladder::Rung;
 use facetty_proto::media::{ServerControl, VideoFrame};
 use facetty_proto::quic::VideoSender;
-use quinn::Connection;
 use tokio::sync::{Notify, mpsc};
 use tokio::task::JoinHandle;
 use tracing::debug;
+use web_transport_quinn::{Session, WriteError};
 
 #[derive(Default)]
 pub struct Rooms {
@@ -27,7 +27,7 @@ struct Room {
 }
 
 struct Member {
-    conn: Connection,
+    conn: Session,
     video: Arc<VideoSender>,
     control: mpsc::UnboundedSender<ServerControl>,
     encode_rungs: Vec<Rung>,
@@ -67,15 +67,14 @@ impl Rooms {
         self: &Arc<Self>,
         room_name: &str,
         participant: ParticipantId,
-        conn: Connection,
+        conn: Session,
         control: mpsc::UnboundedSender<ServerControl>,
     ) -> Membership {
         let generation = self.generation.fetch_add(1, Ordering::Relaxed);
         let mut rooms = self.lock();
         let room = rooms.entry(room_name.to_string()).or_default();
         if let Some(old) = room.members.remove(&participant) {
-            old.conn
-                .close(0u32.into(), b"replaced by a newer connection");
+            old.conn.close(0, b"replaced by a newer connection");
             room.subscriptions.retain(|(sub, _), _| *sub != participant);
         }
         room.members.insert(
@@ -237,7 +236,7 @@ impl Subscription {
                 };
                 if let Err(e) = video.send(&frame).await {
                     debug!("video forward failed: {e}");
-                    if matches!(e, quinn::WriteError::ConnectionLost(_)) {
+                    if matches!(e, WriteError::SessionError(_)) {
                         break;
                     }
                 }

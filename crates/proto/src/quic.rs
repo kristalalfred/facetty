@@ -1,13 +1,14 @@
-//! Claude: the media protocol's streams over a QUIC connection.
+//! Claude: the media protocol's streams over a QUIC connection, raw from
+//! native clients or as a WebTransport session from browsers.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use quinn::{Connection, WriteError};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Notify;
+use web_transport_quinn::{Session, WriteError};
 
 use crate::media::{Error, MAX_CONTROL_MESSAGE, VideoFrame, decode, encode};
 
@@ -60,15 +61,15 @@ where
 /// trip shows such a queue. Callers fold the frames that arrive meanwhile
 /// into the next one they send.
 pub struct VideoSender {
-    conn: Connection,
+    session: Session,
     unacked: AtomicU64,
     acked: Notify,
 }
 
 impl VideoSender {
-    pub fn new(conn: Connection) -> Arc<Self> {
+    pub fn new(session: Session) -> Arc<Self> {
         Arc::new(Self {
-            conn,
+            session,
             unacked: AtomicU64::new(0),
             acked: Notify::new(),
         })
@@ -87,25 +88,26 @@ impl VideoSender {
 
     fn has_room(&self) -> bool {
         let unacked = self.unacked.load(Ordering::Relaxed);
-        let path = self.conn.stats().path;
+        let path = quinn::Connection::stats(&self.session).path;
         unacked == 0 || (unacked < path.cwnd && path.rtt < path.min_rtt + QUEUE_BUDGET)
     }
 
     pub async fn send(self: &Arc<Self>, frame: &VideoFrame) -> Result<(), WriteError> {
         let bytes = encode(frame);
         let len = bytes.len() as u64;
-        let mut stream = self.conn.open_uni().await?;
+        let mut stream = self.session.open_uni().await?;
         self.unacked.fetch_add(len, Ordering::Relaxed);
-        let delivered = stream.stopped();
+        let written = match stream.write_all(&bytes).await {
+            Ok(()) => stream.finish().map_err(|_| WriteError::ClosedStream),
+            Err(e) => Err(e),
+        };
         let this = self.clone();
         tokio::spawn(async move {
-            let _ = delivered.await;
+            let _ = stream.stopped().await;
             this.unacked.fetch_sub(len, Ordering::Relaxed);
             this.acked.notify_waiters();
         });
-        stream.write_all(&bytes).await?;
-        stream.finish()?;
-        Ok(())
+        written
     }
 }
 

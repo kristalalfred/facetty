@@ -13,7 +13,7 @@ use axum::{Json, Router};
 use facetty_proto::signal::{self, CallInvite, ClientEvent, MediaServer, Participant, ServerEvent};
 use facetty_proto::{ParticipantId, token};
 use serde::Deserialize;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
 
 const INVITE_TTL: Duration = Duration::from_secs(24 * 3600);
@@ -25,9 +25,11 @@ pub struct Config {
     /// Most calls held at once. When full, creating a call drops the oldest
     /// call nobody is in, and fails if every call has someone in it.
     pub max_calls: usize,
-    /// Media server handed to every caller. An `addr` of `:port` means that
-    /// port on the host the caller used to reach us.
-    pub media: MediaServer,
+    /// Claude: media server address handed to every caller. `:port` means
+    /// that port on the host the caller used to reach us.
+    pub media_addr: String,
+    /// Claude: hex SHA-256 of the media server's current certificate.
+    pub media_cert: watch::Receiver<String>,
 }
 
 pub struct Signal {
@@ -254,10 +256,13 @@ fn admit(
     host: Option<&str>,
     events: mpsc::UnboundedSender<ServerEvent>,
 ) -> Result<ServerEvent, String> {
-    let mut media = signal.config.media.clone();
+    let mut media = MediaServer {
+        addr: signal.config.media_addr.clone(),
+        cert_sha256: signal.config.media_cert.borrow().clone(),
+    };
     if media.addr.starts_with(':') {
         let host = host.ok_or("cannot tell which host the media server is on")?;
-        media.addr = format!("{host}{}", media.addr);
+        media.addr = format!("{}{}", media_host(host), media.addr);
     }
     let mut inner = signal.lock();
     let room = inner
@@ -383,6 +388,16 @@ fn clean_name(name: Option<&str>) -> String {
     }
 }
 
+/// Claude: `localhost` can resolve to `::1` first, where the media listener
+/// is not by default, and browsers cannot fall back to IPv4 for WebTransport.
+fn media_host(host: &str) -> &str {
+    if host.eq_ignore_ascii_case("localhost") {
+        "127.0.0.1"
+    } else {
+        host
+    }
+}
+
 /// `host:port` or `[v6]:port` from a Host header, without the port.
 fn strip_port(host: &str) -> &str {
     if let Some(end) = host.find(']') {
@@ -454,10 +469,8 @@ mod tests {
             Config {
                 host_key: host_key.map(<[u8]>::to_vec),
                 max_calls,
-                media: MediaServer {
-                    addr: "localhost:8741".into(),
-                    cert_sha256: "test".into(),
-                },
+                media_addr: "localhost:8741".into(),
+                media_cert: watch::channel("test".to_string()).1,
             },
         )
     }
@@ -487,6 +500,33 @@ mod tests {
             create_call(State(signal.clone()), headers).await.status(),
             StatusCode::CREATED
         );
+    }
+
+    #[test]
+    fn media_is_on_the_host_callers_used_with_localhost_as_ipv4() {
+        let signal = Signal::new(
+            b"server-secret",
+            Config {
+                host_key: None,
+                max_calls: 10,
+                media_addr: ":8741".into(),
+                media_cert: watch::channel("test".to_string()).1,
+            },
+        );
+        let call = signal.create_call().unwrap();
+        for (host, addr) in [
+            ("calls.example.com", "calls.example.com:8741"),
+            ("localhost", "127.0.0.1:8741"),
+            ("[::1]", "[::1]:8741"),
+        ] {
+            let (events, _rx) = mpsc::unbounded_channel();
+            let Ok(ServerEvent::Welcome { media, .. }) =
+                admit(&signal, &call.code, participant(1), Some(host), events)
+            else {
+                panic!("not admitted");
+            };
+            assert_eq!(media.addr, addr);
+        }
     }
 
     #[tokio::test]

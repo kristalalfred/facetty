@@ -9,9 +9,10 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
 use facetty_proto::{quic, token};
-use quinn::{Connection, Endpoint};
-use tokio::sync::mpsc;
+use quinn::Endpoint;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, info, warn};
+use web_transport_quinn::Session;
 
 use room::Rooms;
 
@@ -21,7 +22,7 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Sfu {
     endpoint: Endpoint,
-    identity: Identity,
+    certificate: watch::Sender<String>,
     rooms: Arc<Rooms>,
     secret: Arc<[u8]>,
 }
@@ -33,7 +34,7 @@ impl Sfu {
             .with_context(|| format!("binding QUIC endpoint on {listen}"))?;
         Ok(Self {
             endpoint,
-            identity,
+            certificate: watch::Sender::new(identity.sha256_hex),
             rooms: Arc::new(Rooms::default()),
             secret: secret.into(),
         })
@@ -43,8 +44,10 @@ impl Sfu {
         Ok(self.endpoint.local_addr()?)
     }
 
-    pub fn cert_sha256(&self) -> &str {
-        &self.identity.sha256_hex
+    /// Claude: hex SHA-256 of the certificate new connections get. It changes
+    /// daily.
+    pub fn certificate(&self) -> watch::Receiver<String> {
+        self.certificate.subscribe()
     }
 
     pub fn rooms(&self) -> Arc<Rooms> {
@@ -52,27 +55,78 @@ impl Sfu {
     }
 
     pub async fn run(&self) {
+        tokio::select! {
+            () = self.accept() => {}
+            () = self.rotate_certificates() => {}
+        }
+    }
+
+    async fn accept(&self) {
         while let Some(incoming) = self.endpoint.accept().await {
             let rooms = self.rooms.clone();
             let secret = self.secret.clone();
             tokio::spawn(async move {
                 let remote = incoming.remote_address();
-                let conn = match incoming.await {
-                    Ok(c) => c,
-                    Err(e) => {
-                        debug!(%remote, "handshake failed: {e}");
-                        return;
-                    }
-                };
-                if let Err(e) = serve_connection(conn, rooms, &secret).await {
+                let session =
+                    match tokio::time::timeout(HELLO_TIMEOUT, open_session(incoming)).await {
+                        Ok(Ok(s)) => s,
+                        Ok(Err(e)) => {
+                            debug!(%remote, "handshake failed: {e:#}");
+                            return;
+                        }
+                        Err(_) => {
+                            debug!(%remote, "handshake timed out");
+                            return;
+                        }
+                    };
+                if let Err(e) = serve_connection(session, rooms, &secret).await {
                     debug!(%remote, "connection ended: {e:#}");
                 }
             });
         }
     }
+
+    /// Claude: connections keep the certificate they started with.
+    async fn rotate_certificates(&self) {
+        let mut interval = tokio::time::interval(tls::ROTATE_EVERY);
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let rotated = Identity::generate().and_then(|identity| {
+                self.endpoint
+                    .set_server_config(Some(tls::server_config(&identity)?));
+                Ok(identity.sha256_hex)
+            });
+            match rotated {
+                Ok(hash) => {
+                    info!("media certificate rotated");
+                    self.certificate.send_replace(hash);
+                }
+                Err(e) => warn!("cannot rotate the media certificate: {e:#}"),
+            }
+        }
+    }
 }
 
-async fn serve_connection(conn: Connection, rooms: Arc<Rooms>, secret: &[u8]) -> Result<()> {
+/// Claude: native clients speak the media protocol over raw QUIC; browsers
+/// reach it through a WebTransport session.
+async fn open_session(incoming: quinn::Incoming) -> Result<Session> {
+    let conn = incoming.await?;
+    let alpn = conn
+        .handshake_data()
+        .and_then(|d| d.downcast::<quinn::crypto::rustls::HandshakeData>().ok())
+        .and_then(|d| d.protocol);
+    match alpn.as_deref() {
+        Some(facetty_proto::ALPN) => Ok(Session::raw(conn)),
+        Some(alpn) if alpn == web_transport_quinn::ALPN.as_bytes() => {
+            let request = web_transport_quinn::Request::accept(conn).await?;
+            Ok(request.ok().await?)
+        }
+        _ => bail!("unexpected ALPN"),
+    }
+}
+
+async fn serve_connection(conn: Session, rooms: Arc<Rooms>, secret: &[u8]) -> Result<()> {
     let (mut send, mut recv) = tokio::time::timeout(HELLO_TIMEOUT, conn.accept_bi())
         .await
         .context("no control stream")??;
@@ -122,7 +176,10 @@ async fn serve_connection(conn: Connection, rooms: Arc<Rooms>, secret: &[u8]) ->
     result
 }
 
-async fn read_control(recv: &mut quinn::RecvStream, membership: &room::Membership) -> Result<()> {
+async fn read_control(
+    recv: &mut web_transport_quinn::RecvStream,
+    membership: &room::Membership,
+) -> Result<()> {
     while let Some(msg) = quic::read_control::<_, ClientControl>(recv).await? {
         match msg {
             ClientControl::Subscribe { publisher, rung } => membership.subscribe(publisher, rung),
@@ -134,7 +191,7 @@ async fn read_control(recv: &mut quinn::RecvStream, membership: &room::Membershi
 
 /// Each frame is read in its own task so a stream stalled on loss does not
 /// hold up the frames behind it.
-async fn read_video(conn: &Connection, membership: &Arc<room::Membership>) -> Result<()> {
+async fn read_video(conn: &Session, membership: &Arc<room::Membership>) -> Result<()> {
     loop {
         let mut stream = conn.accept_uni().await?;
         let membership = membership.clone();
@@ -156,7 +213,7 @@ async fn read_video(conn: &Connection, membership: &Arc<room::Membership>) -> Re
     }
 }
 
-async fn read_audio(conn: &Connection, membership: &room::Membership) -> Result<()> {
+async fn read_audio(conn: &Session, membership: &room::Membership) -> Result<()> {
     loop {
         let datagram = conn.read_datagram().await?;
         let Ok(mut packet) = media::decode::<AudioPacket>(&datagram) else {
@@ -172,4 +229,21 @@ pub(crate) fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn the_certificate_is_replaced_daily() {
+        let sfu = Arc::new(Sfu::bind("127.0.0.1:0".parse().unwrap(), b"secret").unwrap());
+        let mut certificate = sfu.certificate();
+        let first = certificate.borrow_and_update().clone();
+        let running = sfu.clone();
+        tokio::spawn(async move { running.run().await });
+        tokio::time::sleep(tls::ROTATE_EVERY + Duration::from_secs(1)).await;
+        certificate.changed().await.unwrap();
+        assert_ne!(*certificate.borrow(), first);
+    }
 }

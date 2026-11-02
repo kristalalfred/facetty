@@ -5,9 +5,17 @@ use anyhow::Result;
 use quinn::crypto::rustls::QuicServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 
-/// A self-signed certificate made at startup. Clients learn its hash from the
-/// signaling server and pin it, so no CA is involved.
+/// Claude: browsers pin a certificate by hash only if it is valid for at most
+/// 14 days, so each one starts a day back, to allow for clock skew, and lasts
+/// 13 days.
+const BACKDATE: time::Duration = time::Duration::days(1);
+const LIFETIME: time::Duration = time::Duration::days(13);
+pub const ROTATE_EVERY: Duration = Duration::from_secs(24 * 3600);
+
+/// A self-signed certificate. Clients learn its hash from the signaling
+/// server and pin it, so no CA is involved.
 pub struct Identity {
     cert: CertificateDer<'static>,
     key: PrivatePkcs8KeyDer<'static>,
@@ -16,9 +24,13 @@ pub struct Identity {
 
 impl Identity {
     pub fn generate() -> Result<Self> {
-        let certified = rcgen::generate_simple_self_signed(vec!["facetty-sfu".to_string()])?;
-        let cert = certified.cert.der().clone();
-        let key = PrivatePkcs8KeyDer::from(certified.signing_key.serialize_der());
+        let mut params = rcgen::CertificateParams::new(vec!["facetty-sfu".to_string()])?;
+        let now = OffsetDateTime::now_utc();
+        params.not_before = now - BACKDATE;
+        params.not_after = now - BACKDATE + LIFETIME;
+        let signing_key = rcgen::KeyPair::generate()?;
+        let cert = params.self_signed(&signing_key)?.der().clone();
+        let key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
         let sha256_hex = hex::encode(Sha256::digest(&cert));
         Ok(Self {
             cert,
@@ -38,7 +50,10 @@ pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
         vec![identity.cert.clone()],
         PrivateKeyDer::Pkcs8(identity.key.clone_key()),
     )?;
-    tls.alpn_protocols = vec![facetty_proto::ALPN.to_vec()];
+    tls.alpn_protocols = vec![
+        facetty_proto::ALPN.to_vec(),
+        web_transport_quinn::ALPN.as_bytes().to_vec(),
+    ];
 
     let mut config = quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(tls)?));
     let transport =

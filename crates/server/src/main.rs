@@ -2,12 +2,14 @@ use std::net::SocketAddr;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::Parser;
-use facetty_proto::signal::MediaServer;
 use facetty_sfu::Sfu;
 use facetty_signal::{Config, Signal};
 use tracing::info;
 
-/// Call server: call codes, rosters and chat over HTTP, video and audio over QUIC.
+mod web;
+
+/// Call server: call codes, rosters, chat and the browser client over HTTP,
+/// video and audio over QUIC.
 #[derive(Parser)]
 #[command(version)]
 struct Args {
@@ -59,19 +61,17 @@ async fn main() -> Result<()> {
     let secret = random_hex()?;
 
     let sfu = Sfu::bind(args.media_listen, secret.as_bytes())?;
-    let media = MediaServer {
-        addr: args
-            .media_addr
-            .unwrap_or_else(|| format!(":{}", args.media_listen.port())),
-        cert_sha256: sfu.cert_sha256().to_string(),
-    };
-    info!(listen = %sfu.local_addr()?, addr = %media.addr, "media listening");
+    let media_addr = args
+        .media_addr
+        .unwrap_or_else(|| format!(":{}", args.media_listen.port()));
+    info!(listen = %sfu.local_addr()?, addr = %media_addr, "media listening");
     let signal = Signal::new(
         secret.as_bytes(),
         Config {
             host_key: host_key.map(String::into_bytes),
             max_calls: args.max_calls as usize,
-            media,
+            media_addr,
+            media_cert: sfu.certificate(),
         },
     );
     let listener = tokio::net::TcpListener::bind(args.listen)
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
 
     tokio::select! {
         () = sfu.run() => bail!("media endpoint closed"),
-        served = axum::serve(listener, facetty_signal::router(signal)) => served.context("serving HTTP"),
+        served = axum::serve(listener, facetty_signal::router(signal).merge(web::router())) => served.context("serving HTTP"),
         stop = shutdown() => stop.context("waiting for a shutdown signal"),
     }
 }

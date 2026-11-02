@@ -29,6 +29,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-segmentation = "1.13.3"
 url = "2.5.8"
+web-transport-quinn = { version = "0.13.5", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 axum = "0.8.9"

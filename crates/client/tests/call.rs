@@ -7,7 +7,6 @@ use facetty::publisher::{Outbox, Publisher};
 use facetty::session::{self, Command, Event, Session};
 use facetty_audio::{Engine, Input, Options, Output};
 use facetty_proto::ladder;
-use facetty_proto::signal::MediaServer;
 use tokio::time::timeout;
 
 const SECRET: &[u8] = b"test-secret";
@@ -22,10 +21,8 @@ async fn start_servers() -> String {
         facetty_signal::Config {
             host_key: Some(HOST_KEY.as_bytes().to_vec()),
             max_calls: 100,
-            media: MediaServer {
-                addr: format!(":{}", sfu.local_addr().unwrap().port()),
-                cert_sha256: sfu.cert_sha256().to_string(),
-            },
+            media_addr: format!(":{}", sfu.local_addr().unwrap().port()),
+            media_cert: sfu.certificate(),
         },
     );
     tokio::spawn(async move { sfu.run().await });
@@ -327,5 +324,196 @@ async fn a_late_subscriber_gets_the_publisher_to_send_a_full_frame() {
     for viewer in viewers {
         viewer.close().await;
     }
+    alice.close().await;
+}
+
+/// Claude: joins the way the browser client does: signaling over the
+/// WebSocket, then media in a WebTransport session that pins the
+/// certificate hash.
+async fn join_over_webtransport(
+    server: &str,
+    code: &str,
+) -> (
+    facetty_proto::signal::Participant,
+    web_transport_quinn::Session,
+    web_transport_quinn::SendStream,
+    web_transport_quinn::RecvStream,
+) {
+    use facetty_proto::media::{ClientControl, ServerControl};
+    use facetty_proto::quic;
+    use facetty_proto::signal::ServerEvent;
+    use futures_util::StreamExt;
+
+    let url = session::ws_url(server, code, "web").unwrap();
+    let (mut ws, _) = tokio_tungstenite::connect_async(url.as_str())
+        .await
+        .unwrap();
+    let Some(Ok(tokio_tungstenite::tungstenite::Message::Text(welcome))) = ws.next().await else {
+        panic!("no welcome");
+    };
+    let ServerEvent::Welcome {
+        you, token, media, ..
+    } = serde_json::from_str(&welcome).unwrap()
+    else {
+        panic!("unexpected first event");
+    };
+    tokio::spawn(async move { while ws.next().await.is_some() {} });
+
+    let client = web_transport_quinn::ClientBuilder::new()
+        .with_server_certificate_hashes(vec![hex::decode(&media.cert_sha256).unwrap()])
+        .unwrap();
+    let url = url::Url::parse(&format!("https://{}/", media.addr)).unwrap();
+    let session = client.connect(url).await.unwrap();
+    let (mut control, mut replies) = session.open_bi().await.unwrap();
+    quic::write_control(&mut control, &ClientControl::Hello { token })
+        .await
+        .unwrap();
+    let reply = quic::read_control::<_, ServerControl>(&mut replies)
+        .await
+        .unwrap();
+    assert_eq!(
+        reply,
+        Some(ServerControl::Welcome {
+            participant: you.id
+        })
+    );
+    (you, session, control, replies)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_webtransport_guest_and_a_native_caller_see_and_hear_each_other() {
+    use facetty_ascii::{Cell, Decoder, Encoder, Frame};
+    use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
+    use facetty_proto::quic;
+
+    let server = start_servers().await;
+    let code = session::create_call(&server, Some(HOST_KEY))
+        .await
+        .unwrap()
+        .code;
+    let alice_video = Outbox::default();
+    let mut alice = session::connect(&server, &code, "alice", alice_video.clone())
+        .await
+        .unwrap();
+    let alice_publisher = Publisher::start(Source::Test, 30, alice_video, true);
+    let _alice_mic = Engine::start(
+        Options {
+            input: Input::Pcm(Box::new(Tone(0))),
+            output: Output::None,
+        },
+        session::audio_sender(alice.connection.clone()),
+    )
+    .unwrap();
+    let alice_ears = Arc::new(
+        Engine::start(
+            Options {
+                input: Input::None,
+                output: Output::None,
+            },
+            |_, _| {},
+        )
+        .unwrap(),
+    );
+    tokio::spawn(session::receive_audio(
+        alice.connection.clone(),
+        alice_ears.clone(),
+    ));
+
+    let (guest, web, mut control, mut replies) = join_over_webtransport(&server, &code).await;
+    let rung = ladder::best_fit(80, 24).unwrap();
+    quic::write_control(
+        &mut control,
+        &ClientControl::Subscribe {
+            publisher: alice.me.id,
+            rung: Some(rung),
+        },
+    )
+    .await
+    .unwrap();
+    let wanted = next_matching(&mut alice, |e| match e {
+        Event::EncodeRungs(r) => Some(r),
+        _ => None,
+    })
+    .await;
+    alice_publisher.set_rungs(wanted);
+
+    let mut stream = timeout(WAIT, web.accept_uni()).await.unwrap().unwrap();
+    let bytes = stream.read_to_end(media::MAX_VIDEO_FRAME).await.unwrap();
+    let frame: VideoFrame = media::decode(&bytes).unwrap();
+    assert_eq!(frame.publisher, alice.me.id);
+    let picture = Decoder::default()
+        .decode(frame.seq, &frame.payload)
+        .unwrap();
+    assert!(picture.cells.iter().any(|c| c.glyph != 0), "frame is blank");
+
+    let heard = timeout(WAIT, web.read_datagram()).await.unwrap().unwrap();
+    let packet: AudioPacket = media::decode(&heard).unwrap();
+    assert_eq!(packet.publisher, alice.me.id);
+
+    alice
+        .commands
+        .send(Command::Subscribe {
+            publisher: guest.id,
+            rung: Some(rung),
+        })
+        .unwrap();
+    let request = timeout(WAIT, quic::read_control::<_, ServerControl>(&mut replies))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        request,
+        Some(ServerControl::EncodeRungs { rungs: vec![rung] })
+    );
+    let size = ladder::size(rung).unwrap();
+    let mut picture = Frame::blank(size.cols, size.rows);
+    picture.cells.fill(Cell {
+        glyph: 8,
+        rgb: [200, 120, 40],
+    });
+    let payload = Encoder::default().encode(&picture);
+    let sent = media::encode(&VideoFrame {
+        publisher: 0,
+        rung,
+        seq: 1,
+        payload,
+    });
+    let mut out = web.open_uni().await.unwrap();
+    out.write_all(&sent).await.unwrap();
+    out.finish().unwrap();
+    let shown = next_matching(&mut alice, |e| match e {
+        Event::Video {
+            publisher, frame, ..
+        } if publisher == guest.id => Some(frame),
+        _ => None,
+    })
+    .await;
+    assert_eq!(shown.cells[0].glyph, 8);
+
+    let mut seq = 0u16;
+    timeout(WAIT, async {
+        while alice_ears.level(guest.id) < 0.01 {
+            let mut pcm = [0f32; facetty_audio::FRAME_SAMPLES];
+            for (i, s) in pcm.iter_mut().enumerate() {
+                *s = 0.3 * (i as f32 * 0.07).sin();
+            }
+            let opus = facetty_audio::opus::Encoder::new()
+                .unwrap()
+                .encode(&pcm)
+                .unwrap();
+            let packet = AudioPacket {
+                publisher: 0,
+                seq,
+                payload: opus,
+            };
+            web.send_datagram(media::encode(&packet).into()).unwrap();
+            seq = seq.wrapping_add(1);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("alice never heard the guest");
+
+    web.close(0, b"bye");
     alice.close().await;
 }
