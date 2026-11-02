@@ -14,12 +14,12 @@ pub struct Rect {
     pub h: f64,
 }
 
-pub fn grid(width: f64, height: f64, n: usize) -> Vec<Rect> {
+pub fn grid(area: Rect, n: usize) -> Vec<Rect> {
     if n == 0 {
         return Vec::new();
     }
-    let area_w = (width - 2.0 * MARGIN).max(0.0);
-    let area_h = (height - 2.0 * MARGIN).max(0.0);
+    let area_w = (area.w - 2.0 * MARGIN).max(0.0);
+    let area_h = (area.h - 2.0 * MARGIN).max(0.0);
     let (cols, tile_w) = (1..=n)
         .map(|cols| {
             let rows = n.div_ceil(cols);
@@ -30,14 +30,14 @@ pub fn grid(width: f64, height: f64, n: usize) -> Vec<Rect> {
         .fold((1, -1.0), |best, c| if c.1 > best.1 { c } else { best });
     let tile_h = tile_w * 9.0 / 16.0;
     let rows = n.div_ceil(cols);
-    let top = (height - (rows as f64 * tile_h + GAP * (rows - 1) as f64)) / 2.0;
+    let top = area.y + (area.h - (rows as f64 * tile_h + GAP * (rows - 1) as f64)) / 2.0;
     (0..n)
         .map(|i| {
             let (row, col) = (i / cols, i % cols);
             let in_row = (n - row * cols).min(cols);
             let row_w = in_row as f64 * tile_w + GAP * (in_row - 1) as f64;
             Rect {
-                x: (width - row_w) / 2.0 + col as f64 * (tile_w + GAP),
+                x: area.x + (area.w - row_w) / 2.0 + col as f64 * (tile_w + GAP),
                 y: top + row as f64 * (tile_h + GAP),
                 w: tile_w,
                 h: tile_h,
@@ -55,6 +55,15 @@ pub fn rung_for(tile: &Rect) -> Option<Rung> {
 mod tests {
     use super::*;
 
+    fn area(w: f64, h: f64) -> Rect {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w,
+            h,
+        }
+    }
+
     fn overlaps(a: &Rect, b: &Rect) -> bool {
         a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
     }
@@ -63,7 +72,7 @@ mod tests {
     fn tiles_fit_without_overlapping() {
         for (w, h) in [(1920.0, 1080.0), (390.0, 844.0), (1280.0, 400.0)] {
             for n in 1..=9 {
-                let tiles = grid(w, h, n);
+                let tiles = grid(area(w, h), n);
                 assert_eq!(tiles.len(), n);
                 for (i, a) in tiles.iter().enumerate() {
                     assert!(a.x >= 0.0 && a.y >= 0.0 && a.x + a.w <= w && a.y + a.h <= h);
@@ -78,14 +87,14 @@ mod tests {
 
     #[test]
     fn two_people_sit_side_by_side_in_a_wide_view() {
-        let tiles = grid(1920.0, 1080.0, 2);
+        let tiles = grid(area(1920.0, 1080.0), 2);
         assert_eq!(tiles[0].y, tiles[1].y);
         assert!(tiles[0].x < tiles[1].x);
     }
 
     #[test]
     fn a_phone_stacks_people() {
-        let tiles = grid(390.0, 844.0, 2);
+        let tiles = grid(area(390.0, 844.0), 2);
         assert_eq!(tiles[0].x, tiles[1].x);
     }
 

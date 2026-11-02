@@ -13,6 +13,8 @@ mod render;
 #[cfg(target_arch = "wasm32")]
 mod signal;
 #[cfg(target_arch = "wasm32")]
+mod stage;
+#[cfg(target_arch = "wasm32")]
 mod transport;
 #[cfg(target_arch = "wasm32")]
 mod util;
