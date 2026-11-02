@@ -9,9 +9,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use facetty_ascii::{Decoder, Frame};
 use facetty_proto::ladder::Rung;
-use facetty_proto::media::{
-    self, AudioPacket, ClientControl, ServerControl, VideoFrame, VideoSender,
-};
+use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
+use facetty_proto::quic::{self, VideoSender};
 use facetty_proto::signal::{CallInvite, ClientEvent, MediaServer, Participant, ServerEvent};
 use facetty_proto::{ALPN, ParticipantId};
 use futures_util::{SinkExt, StreamExt};
@@ -171,8 +170,8 @@ pub async fn connect(server: &str, room: &str, name: &str, video_out: Outbox) ->
 
     let (endpoint, connection) = connect_media(&media_server).await?;
     let (mut control_send, mut control_recv) = connection.open_bi().await?;
-    media::write_control(&mut control_send, &ClientControl::Hello { token }).await?;
-    match media::read_control::<_, ServerControl>(&mut control_recv).await? {
+    quic::write_control(&mut control_send, &ClientControl::Hello { token }).await?;
+    match quic::read_control::<_, ServerControl>(&mut control_recv).await? {
         Some(ServerControl::Welcome { .. }) => {}
         Some(ServerControl::Error { message }) => bail!("media server: {message}"),
         other => bail!("unexpected media server reply {other:?}"),
@@ -252,11 +251,11 @@ pub async fn connect(server: &str, room: &str, name: &str, video_out: Outbox) ->
             tokio::select! {
                 out = control_rx.recv() => {
                     let Some(msg) = out else { break };
-                    if media::write_control(&mut control_send, &msg).await.is_err() {
+                    if quic::write_control(&mut control_send, &msg).await.is_err() {
                         break;
                     }
                 }
-                incoming = media::read_control::<_, ServerControl>(&mut control_recv) => {
+                incoming = quic::read_control::<_, ServerControl>(&mut control_recv) => {
                     match incoming {
                         Ok(Some(ServerControl::EncodeRungs { rungs })) => {
                             let _ = events_control.send(Event::EncodeRungs(rungs));

@@ -1,71 +1,50 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
 
+use crate::FRAME_SAMPLES;
 use crate::jitter::JitterBuffer;
-use crate::{FRAME_SAMPLES, Shared};
-
-pub(crate) enum Command {
-    Packet {
-        publisher: u32,
-        seq: u16,
-        payload: Vec<u8>,
-    },
-    Remove(u32),
-}
 
 struct Remote {
     jitter: JitterBuffer,
     level: f32,
 }
 
-/// Owned by whichever thread drives playback (the device callback or the
-/// headless clock). Packets reach it through `Shared::inbox`, so the network
-/// side never waits on decoding.
-pub(crate) struct Mixer {
-    shared: Arc<Shared>,
+/// Every publisher's jitter buffer, mixed into one 20 ms frame at a time by
+/// whatever drives playback.
+pub struct Mix {
     remotes: HashMap<u32, Remote>,
-    commands: Vec<Command>,
     scratch: [f32; FRAME_SAMPLES],
 }
 
-impl Mixer {
-    pub fn new(shared: Arc<Shared>) -> Self {
-        Mixer {
-            shared,
+impl Default for Mix {
+    fn default() -> Self {
+        Mix {
             remotes: HashMap::new(),
-            commands: Vec::new(),
             scratch: [0.0; FRAME_SAMPLES],
         }
     }
+}
+
+impl Mix {
+    pub fn push(&mut self, publisher: u32, seq: u16, payload: &[u8]) {
+        let remote = match self.remotes.entry(publisher) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => match JitterBuffer::new() {
+                Ok(jitter) => e.insert(Remote { jitter, level: 0.0 }),
+                Err(err) => {
+                    tracing::warn!("audio decoder for {publisher}: {err}");
+                    return;
+                }
+            },
+        };
+        remote.jitter.push(seq, payload);
+    }
+
+    pub fn remove(&mut self, publisher: u32) {
+        self.remotes.remove(&publisher);
+    }
 
     pub fn mix(&mut self, out: &mut [f32; FRAME_SAMPLES]) {
-        std::mem::swap(&mut self.commands, &mut self.shared.inbox.lock().unwrap());
-        for command in self.commands.drain(..) {
-            match command {
-                Command::Packet {
-                    publisher,
-                    seq,
-                    payload,
-                } => {
-                    let remote = match self.remotes.entry(publisher) {
-                        Entry::Occupied(e) => e.into_mut(),
-                        Entry::Vacant(e) => match JitterBuffer::new() {
-                            Ok(jitter) => e.insert(Remote { jitter, level: 0.0 }),
-                            Err(err) => {
-                                tracing::warn!("audio decoder for {publisher}: {err}");
-                                continue;
-                            }
-                        },
-                    };
-                    remote.jitter.push(seq, &payload);
-                }
-                Command::Remove(publisher) => {
-                    self.remotes.remove(&publisher);
-                }
-            }
-        }
-
         out.fill(0.0);
         for remote in self.remotes.values_mut() {
             let loudness = if remote.jitter.pull(&mut self.scratch) {
@@ -81,20 +60,21 @@ impl Mixer {
         for s in out.iter_mut() {
             *s = soft_clip(*s);
         }
+    }
 
-        let mut levels = self.shared.levels.lock().unwrap();
-        levels.clear();
-        levels.extend(self.remotes.iter().map(|(&id, r)| (id, r.level)));
+    /// Each publisher's smoothed loudness, 0 to 1, as of the last mix.
+    pub fn levels(&self) -> impl Iterator<Item = (u32, f32)> + '_ {
+        self.remotes.iter().map(|(&id, r)| (id, r.level))
     }
 }
 
-pub(crate) fn loudness(frame: &[f32]) -> f32 {
+pub fn loudness(frame: &[f32]) -> f32 {
     let mean_square = frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32;
     let db = 10.0 * mean_square.max(1e-10).log10();
     ((db + 55.0) / 40.0).clamp(0.0, 1.0)
 }
 
-pub(crate) fn smooth(previous: f32, current: f32) -> f32 {
+pub fn smooth(previous: f32, current: f32) -> f32 {
     if current > previous {
         current
     } else {

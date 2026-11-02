@@ -9,6 +9,7 @@
 
 mod analysis;
 mod codec;
+mod compression;
 pub mod reel;
 
 pub use analysis::{Analyzer, Params};

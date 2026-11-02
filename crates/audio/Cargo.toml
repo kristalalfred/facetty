@@ -6,6 +6,10 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-cpal = "0.18.2"
+cpal = { version = "0.18.2", optional = true }
 tracing = "0.1.44"
 unsafe-libopus = "0.2.0"
+
+[features]
+default = ["engine"]
+engine = ["dep:cpal"]

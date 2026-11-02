@@ -5,7 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 
-use crate::mixer::Mixer;
+use crate::engine::Mixer;
 use crate::resample::Resampler;
 use crate::{FRAME_SAMPLES, SAMPLE_RATE};
 
@@ -39,7 +39,7 @@ pub(crate) fn find(name: Option<&str>, input: bool) -> Result<Device> {
         host.output_devices()?.collect()
     };
     let names: Vec<String> = devices.iter().map(device_name).collect();
-    let found = crate::pick_device(&names, name)
+    let found = crate::engine::pick_device(&names, name)
         .ok_or_else(|| anyhow!("no {} device matching {name:?}", direction(input)))?;
     Ok(devices.into_iter().nth(found).unwrap())
 }

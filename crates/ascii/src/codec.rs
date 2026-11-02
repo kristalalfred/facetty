@@ -7,7 +7,7 @@
 //! receiver that missed one shows a few old cells instead of garbage, and each
 //! update also resends one rotating band of rows to correct those.
 
-use crate::{Cell, Frame, GLYPHS};
+use crate::{Cell, Frame, GLYPHS, compression};
 
 const VERSION: u8 = 2;
 const HEADER: usize = 6;
@@ -240,8 +240,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed, DecodeError> {
         UPDATE => mask_len + 2 * n,
         other => return Err(DecodeError::Kind(other)),
     };
-    let body =
-        zstd::bulk::decompress(&bytes[HEADER..], capacity).map_err(|_| DecodeError::Corrupt)?;
+    let body = compression::decompress(&bytes[HEADER..], capacity)?;
     let body = if kind == FULL {
         if body.len() != 2 * n {
             return Err(DecodeError::Corrupt);
@@ -264,7 +263,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed, DecodeError> {
 }
 
 fn seal(kind: u8, cols: u16, rows: u16, body: &[u8]) -> Vec<u8> {
-    let body = zstd::bulk::compress(body, ZSTD_LEVEL).expect("zstd compression into Vec");
+    let body = compression::compress(body, ZSTD_LEVEL);
     let mut out = Vec::with_capacity(HEADER + body.len());
     out.extend([VERSION, kind]);
     out.extend(cols.to_le_bytes());
@@ -548,7 +547,7 @@ mod tests {
             Err(DecodeError::TooLarge(0xffff, 0xffff))
         );
         let mut bogus = vec![VERSION, UPDATE, 8, 0, 1, 0];
-        bogus.extend(zstd::bulk::compress(&[0b11, 1, 2], 3).unwrap());
+        bogus.extend(compression::compress(&[0b11, 1, 2], 3));
         assert_eq!(decoder.decode(1, &bogus), Err(DecodeError::Corrupt));
     }
 }

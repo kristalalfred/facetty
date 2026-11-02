@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use facetty_proto::media::{self, AudioPacket, ClientControl, ServerControl, VideoFrame};
-use facetty_proto::token;
+use facetty_proto::{quic, token};
 use quinn::{Connection, Endpoint};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -76,7 +76,7 @@ async fn serve_connection(conn: Connection, rooms: Arc<Rooms>, secret: &[u8]) ->
     let (mut send, mut recv) = tokio::time::timeout(HELLO_TIMEOUT, conn.accept_bi())
         .await
         .context("no control stream")??;
-    let hello = tokio::time::timeout(HELLO_TIMEOUT, media::read_control(&mut recv))
+    let hello = tokio::time::timeout(HELLO_TIMEOUT, quic::read_control(&mut recv))
         .await
         .context("no hello")??;
     let Some(ClientControl::Hello { token }) = hello else {
@@ -85,7 +85,7 @@ async fn serve_connection(conn: Connection, rooms: Arc<Rooms>, secret: &[u8]) ->
     let claims = match token::verify(secret, &token, unix_now()) {
         Ok(c) => c,
         Err(e) => {
-            let _ = media::write_control(
+            let _ = quic::write_control(
                 &mut send,
                 &ServerControl::Error {
                     message: e.to_string(),
@@ -105,7 +105,7 @@ async fn serve_connection(conn: Connection, rooms: Arc<Rooms>, secret: &[u8]) ->
 
     let writer = tokio::spawn(async move {
         while let Some(msg) = control_rx.recv().await {
-            if media::write_control(&mut send, &msg).await.is_err() {
+            if quic::write_control(&mut send, &msg).await.is_err() {
                 break;
             }
         }
@@ -123,7 +123,7 @@ async fn serve_connection(conn: Connection, rooms: Arc<Rooms>, secret: &[u8]) ->
 }
 
 async fn read_control(recv: &mut quinn::RecvStream, membership: &room::Membership) -> Result<()> {
-    while let Some(msg) = media::read_control::<_, ClientControl>(recv).await? {
+    while let Some(msg) = quic::read_control::<_, ClientControl>(recv).await? {
         match msg {
             ClientControl::Subscribe { publisher, rung } => membership.subscribe(publisher, rung),
             ClientControl::Hello { .. } => warn!("duplicate hello"),

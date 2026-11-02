@@ -7,7 +7,7 @@
 //! the call codec and XORed with the previous frame's.
 
 use crate::codec::{Packed, pack, unpack};
-use crate::{DecodeError, Frame};
+use crate::{DecodeError, Frame, compression};
 
 const MAGIC: &[u8; 6] = b"FTREEL";
 const VERSION: u8 = 1;
@@ -70,7 +70,7 @@ fn body(reel: &Reel) -> Vec<u8> {
         }
         prev = packed;
     }
-    zstd::bulk::compress(&raw, ZSTD_LEVEL).expect("zstd compression into Vec")
+    compression::compress(&raw, ZSTD_LEVEL)
 }
 
 /// Decodes the reel in `data` with the most cells that fits within
@@ -109,7 +109,7 @@ pub fn decode_fitting(data: &[u8], cols: u16, rows: u16) -> Result<Option<Reel>,
     if size > MAX_BYTES {
         return Err(DecodeError::TooLarge(c, r));
     }
-    let raw = zstd::bulk::decompress(compressed, size).map_err(|_| DecodeError::Corrupt)?;
+    let raw = compression::decompress(compressed, size)?;
     if raw.len() != size {
         return Err(DecodeError::Corrupt);
     }
