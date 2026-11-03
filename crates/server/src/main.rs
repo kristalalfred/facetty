@@ -6,7 +6,12 @@ use facetty_sfu::Sfu;
 use facetty_signal::{Config, Signal};
 use tracing::info;
 
+mod http;
 mod web;
+
+/// Claude: HTTP connections beyond one WebSocket per participant, for page
+/// loads and calls being joined.
+const SPARE_HTTP_CONNECTIONS: usize = 128;
 
 /// Call server: call codes, rosters, chat and the browser client over HTTP,
 /// video and audio over QUIC.
@@ -34,6 +39,10 @@ struct Args {
     #[arg(long, env = "FACETTY_MAX_CALLS", default_value_t = 1000,
           value_parser = clap::value_parser!(u32).range(1..))]
     max_calls: u32,
+    /// Most people in calls at once, across all calls.
+    #[arg(long, env = "FACETTY_MAX_PARTICIPANTS", default_value_t = 64,
+          value_parser = clap::value_parser!(u32).range(1..))]
+    max_participants: u32,
 }
 
 #[tokio::main]
@@ -70,6 +79,7 @@ async fn main() -> Result<()> {
         Config {
             host_key: host_key.map(String::into_bytes),
             max_calls: args.max_calls as usize,
+            max_participants: args.max_participants as usize,
             media_addr,
             media_cert: sfu.certificate(),
         },
@@ -77,11 +87,19 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await
         .with_context(|| format!("binding {}", args.listen))?;
-    info!(listen = %listener.local_addr()?, open = args.open, max_calls = args.max_calls, "server up");
+    info!(
+        listen = %listener.local_addr()?,
+        open = args.open,
+        max_calls = args.max_calls,
+        max_participants = args.max_participants,
+        "server up"
+    );
 
+    let max_connections = args.max_participants as usize + SPARE_HTTP_CONNECTIONS;
+    let roster = signal.clone();
     tokio::select! {
-        () = sfu.run() => bail!("media endpoint closed"),
-        served = axum::serve(listener, facetty_signal::router(signal).merge(web::router())) => served.context("serving HTTP"),
+        () = sfu.run(move |room, id| roster.departure(room, id)) => bail!("media endpoint closed"),
+        never = http::serve(listener, facetty_signal::router(signal).merge(web::router()), max_connections) => match never {},
         stop = shutdown() => stop.context("waiting for a shutdown signal"),
     }
 }

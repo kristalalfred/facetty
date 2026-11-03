@@ -56,10 +56,21 @@ pub fn server_config(identity: &Identity) -> Result<quinn::ServerConfig> {
     ];
 
     let mut config = quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(tls)?));
+    config
+        .max_incoming(256)
+        .incoming_buffer_size(64 * 1024)
+        .incoming_buffer_size_total(4 << 20);
     let transport =
         Arc::get_mut(&mut config.transport).expect("transport config is not shared yet");
+    // Claude: a browser's HTTP/3 control and QPACK streams and its
+    // WebTransport CONNECT stream count against these stream limits.
     transport
-        .max_concurrent_uni_streams(1024u32.into())
+        .max_concurrent_uni_streams(16u32.into())
+        .max_concurrent_bidi_streams(4u32.into())
+        .receive_window((512u32 * 1024).into())
+        .send_window(1 << 20)
+        .datagram_receive_buffer_size(Some(16 * 1024))
+        .datagram_send_buffer_size(64 * 1024)
         .max_idle_timeout(Some(Duration::from_secs(15).try_into()?))
         .keep_alive_interval(Some(Duration::from_secs(5)));
     Ok(config)

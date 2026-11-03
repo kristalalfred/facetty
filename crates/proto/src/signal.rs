@@ -71,6 +71,7 @@ pub struct CallInvite {
 pub const MAX_NAME_LEN: usize = 32;
 pub const MAX_CHAT_LEN: usize = 500;
 pub const MAX_ROOM_LEN: usize = 64;
+pub const MAX_CALL_PARTICIPANTS: usize = 16;
 
 /// The only emoji the signaling server forwards. All are two cells wide
 /// without a variation selector, so terminals agree on their width.

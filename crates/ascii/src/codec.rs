@@ -209,6 +209,23 @@ pub fn merge(older: &[u8], newer: &[u8]) -> Result<Vec<u8>, DecodeError> {
     })
 }
 
+/// Claude: columns and rows of an encoded frame, from its header alone.
+pub fn frame_size(bytes: &[u8]) -> Result<(u16, u16), DecodeError> {
+    if bytes.len() < HEADER {
+        return Err(DecodeError::Truncated);
+    }
+    if bytes[0] != VERSION {
+        return Err(DecodeError::Version(bytes[0]));
+    }
+    if !matches!(bytes[1], FULL | UPDATE) {
+        return Err(DecodeError::Kind(bytes[1]));
+    }
+    Ok((
+        u16::from_le_bytes([bytes[2], bytes[3]]),
+        u16::from_le_bytes([bytes[4], bytes[5]]),
+    ))
+}
+
 enum Body {
     Full(Vec<Packed>),
     Update(Vec<(usize, Packed)>),
@@ -221,24 +238,17 @@ struct Parsed {
 }
 
 fn parse(bytes: &[u8]) -> Result<Parsed, DecodeError> {
-    if bytes.len() < HEADER {
-        return Err(DecodeError::Truncated);
-    }
-    if bytes[0] != VERSION {
-        return Err(DecodeError::Version(bytes[0]));
-    }
+    let (cols, rows) = frame_size(bytes)?;
     let kind = bytes[1];
-    let cols = u16::from_le_bytes([bytes[2], bytes[3]]);
-    let rows = u16::from_le_bytes([bytes[4], bytes[5]]);
     let n = cols as usize * rows as usize;
     if n > MAX_CELLS {
         return Err(DecodeError::TooLarge(cols, rows));
     }
     let mask_len = n.div_ceil(8);
-    let capacity = match kind {
-        FULL => 2 * n,
-        UPDATE => mask_len + 2 * n,
-        other => return Err(DecodeError::Kind(other)),
+    let capacity = if kind == FULL {
+        2 * n
+    } else {
+        mask_len + 2 * n
     };
     let body = compression::decompress(&bytes[HEADER..], capacity)?;
     let body = if kind == FULL {

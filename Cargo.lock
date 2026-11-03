@@ -977,6 +977,8 @@ dependencies = [
  "facetty-sfu",
  "facetty-signal",
  "getrandom 0.4.3",
+ "hyper",
+ "hyper-util",
  "rustls",
  "tokio",
  "tracing",

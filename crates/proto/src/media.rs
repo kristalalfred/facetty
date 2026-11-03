@@ -12,7 +12,9 @@ use crate::ParticipantId;
 use crate::ladder::Rung;
 
 pub const MAX_CONTROL_MESSAGE: usize = 64 * 1024;
-pub const MAX_VIDEO_FRAME: usize = 512 * 1024;
+/// Claude: the largest ladder rung's frame with incompressible cells is
+/// about 42 KB.
+pub const MAX_VIDEO_FRAME: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientControl {

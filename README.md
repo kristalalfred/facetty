@@ -85,8 +85,9 @@ camera:<index>` also takes part of a camera's name. `--video` also accepts
 
 ## Server
 
-`compose.yaml` in this repository runs the server container and passes
-`FACETTY_HOST_KEY`, `FACETTY_OPEN`, and `FACETTY_MAX_CALLS` through:
+`compose.yaml` in this repository runs the server container, limited to 512 MB
+of memory and one CPU, and passes `FACETTY_HOST_KEY`, `FACETTY_OPEN`,
+`FACETTY_MAX_CALLS`, and `FACETTY_MAX_PARTICIPANTS` through:
 `FACETTY_HOST_KEY=<secret> docker compose up -d`.
 
 | Setting | Environment variable | Default |
@@ -97,6 +98,7 @@ camera:<index>` also takes part of a camera's name. `--video` also accepts
 | Key for creating calls | `FACETTY_HOST_KEY` | Generated and printed at startup |
 | Let anyone create calls | `FACETTY_OPEN` | `false` |
 | Most calls held at once | `FACETTY_MAX_CALLS` | `1000` |
+| Most people in calls at once | `FACETTY_MAX_PARTICIPANTS` | `64` |
 
 `FACETTY_MEDIA_ADDR` takes `host:port`, or `:port` to keep the host clients
 used. Set it when clients reach UDP on a different port than the server listens
@@ -133,9 +135,9 @@ With `FACETTY_OPEN=true`, anyone can create calls without a host key. When a
 server holds `FACETTY_MAX_CALLS` calls, creating one drops the oldest call
 nobody is in, and fails if every call has someone in it.
 
-Create more calls with the same host key and server URL. Each code admits guests
-only to its own call; room names cannot create or join calls. Chat, participant
-lists, and media stay within that call.
+A call holds up to 16 people. Create more calls with the same host key and
+server URL. Each code admits guests only to its own call; room names cannot
+create or join calls. Chat, participant lists, and media stay within that call.
 
 Codes accept new participants for 24 hours, including after everyone leaves.
 Already connected participants can continue after expiry. Restarting the

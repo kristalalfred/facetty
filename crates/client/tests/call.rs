@@ -21,11 +21,13 @@ async fn start_servers() -> String {
         facetty_signal::Config {
             host_key: Some(HOST_KEY.as_bytes().to_vec()),
             max_calls: 100,
+            max_participants: 100,
             media_addr: format!(":{}", sfu.local_addr().unwrap().port()),
             media_cert: sfu.certificate(),
         },
     );
-    tokio::spawn(async move { sfu.run().await });
+    let roster = signal.clone();
+    tokio::spawn(async move { sfu.run(move |room, id| roster.departure(room, id)).await });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());

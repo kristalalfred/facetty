@@ -296,7 +296,7 @@ impl App {
                 KeyCode::Backspace => {
                     input.pop();
                 }
-                KeyCode::Char(c) => input.push(c),
+                KeyCode::Char(c) if input.chars().count() < signal::MAX_CHAT_LEN => input.push(c),
                 _ => {}
             }
             return;
@@ -389,7 +389,12 @@ impl App {
     fn on_paste(&mut self, text: &str) {
         self.start_typing();
         if let Some(input) = &mut self.input {
-            input.extend(text.chars().map(|c| if c.is_control() { ' ' } else { c }));
+            let room = signal::MAX_CHAT_LEN.saturating_sub(input.chars().count());
+            input.extend(
+                text.chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .take(room),
+            );
         }
     }
 

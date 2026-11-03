@@ -3,10 +3,16 @@ services:
     image: ghcr.io/kristalalfred/facetty-server:latest
     build: .
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 1
     environment:
       - FACETTY_HOST_KEY
       - FACETTY_OPEN
       - FACETTY_MAX_CALLS
+      - FACETTY_MAX_PARTICIPANTS
     ports:
       - "8740:8740/tcp"
       - "8741:8741/udp"

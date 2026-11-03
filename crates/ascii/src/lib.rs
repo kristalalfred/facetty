@@ -13,7 +13,7 @@ mod compression;
 pub mod reel;
 
 pub use analysis::{Analyzer, Params};
-pub use codec::{DecodeError, Decoder, Encoder, merge};
+pub use codec::{DecodeError, Decoder, Encoder, frame_size, merge};
 
 pub const FILL_GLYPHS: usize = 10;
 
